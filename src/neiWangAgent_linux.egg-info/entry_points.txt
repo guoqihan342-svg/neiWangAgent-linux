@@ -1,0 +1,2 @@
+[console_scripts]
+neiWangAgent = agent_mcp.cli:main

@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: neiWangAgent-linux
+Version: 0.1.0
+Summary: 本地无服务器 MCP Agent — Linux版：自动改代码 → commit → push → 创建 MR
+Requires-Python: >=3.10
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: httpx>=0.24
+Requires-Dist: click>=8.0
+Provides-Extra: db
+Requires-Dist: psycopg2-binary>=2.9; extra == "db"
