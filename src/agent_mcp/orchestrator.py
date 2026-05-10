@@ -1,8 +1,21 @@
 """
-Orchestrator — 核心状态机编排器 v0.1
+Orchestrator — 核心状态机编排器 v0.1（带日志追踪）
 
 实现 Agent 从需求到 MR 的完整流程：
-INIT → WARMUP_CHECK → ... → DONE
+INIT → WARMUP_CHECK → SUMMARY_REFRESH → WORKTREE_GUARD → LOAD_REQUIREMENT →
+RETRIEVE_CONTEXT → UNDERSTAND_REQUIREMENT → CLARIFICATION_GATE →
+PLAN_IMPLEMENTATION → CREATE_BRANCH → IMPLEMENT → CHANGE_SCOPE_GUARD →
+DATABASE_IMPACT_DETECT → PREPARE_COMMIT → COMMIT → PUSH → CREATE_MR → DONE
+
+每个状态转换自动记录：
+  - 进入/退出时间戳
+  - 执行耗时（秒）
+  - 成功/失败状态
+  - 结构化详情（文件数、commit hash 等）
+
+日志双通道输出：
+  - 控制台：人类可读的简洁摘要
+  - 文件（.agent/logs/agent.log）：结构化 JSON Lines，可 grep/jq 分析
 """
 
 from __future__ import annotations
@@ -17,38 +30,46 @@ from typing import Any, Callable
 
 from agent_mcp.config_loader import AppConfig
 from agent_mcp.llm_client import LLMClient
+from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
 
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# 状态常量 — 对应方案 v4 §5.2 状态定义
+# =============================================================================
+
 class State:
-    """状态常量"""
-    INIT = "000"
-    WARMUP_CHECK = "010"
-    SUMMARY_REFRESH = "015"
-    WORKTREE_GUARD = "018"
-    LOAD_REQUIREMENT = "020"
-    RETRIEVE_CONTEXT = "030"
-    UNDERSTAND_REQUIREMENT = "040"
-    CLARIFICATION_GATE = "050"
-    ASK_HUMAN = "060"
-    WAITING_CLARIFICATION = "070"
-    RESUME_WITH_ANSWER = "080"
-    PLAN_IMPLEMENTATION = "100"
-    CREATE_BRANCH = "110"
-    IMPLEMENT = "120"
-    CHANGE_SCOPE_GUARD = "125"
-    DATABASE_IMPACT_DETECT = "130"
-    GENERATE_DB_IMPACT_REPORT = "135"
-    GENERATE_MIGRATION_DRAFT = "140"
-    PREPARE_COMMIT = "150"
-    COMMIT = "160"
-    PUSH = "170"
-    CREATE_MR = "180"
-    DONE = "200"
+    """状态机状态码（三位数编码）"""
+    INIT = "000"                     # 启动
+    WARMUP_CHECK = "010"             # 检查知识库
+    SUMMARY_REFRESH = "015"          # 刷新第一层摘要（Summary 层）
+    WORKTREE_GUARD = "018"           # 工作区保护检查（v4 新增）
+    LOAD_REQUIREMENT = "020"         # 加载需求
+    RETRIEVE_CONTEXT = "030"         # 检索上下文
+    UNDERSTAND_REQUIREMENT = "040"   # 理解需求
+    CLARIFICATION_GATE = "050"       # 澄清判断闸门
+    ASK_HUMAN = "060"                # 生成澄清问题
+    WAITING_CLARIFICATION = "070"    # 等待人类回复
+    RESUME_WITH_ANSWER = "080"       # 恢复执行（带回答）
+    PLAN_IMPLEMENTATION = "100"      # 生成实施计划
+    CREATE_BRANCH = "110"            # 创建 Git 分支
+    IMPLEMENT = "120"                # 修改代码（LLM 驱动）
+    CHANGE_SCOPE_GUARD = "125"       # 变更范围护栏（v4 新增）
+    DATABASE_IMPACT_DETECT = "130"   # 数据库影响检测
+    GENERATE_DB_IMPACT_REPORT = "135"# 生成数据库影响报告
+    GENERATE_MIGRATION_DRAFT = "140" # 生成 migration 草稿
+    PREPARE_COMMIT = "150"           # 准备提交
+    COMMIT = "160"                   # 执行 git commit
+    PUSH = "170"                     # 推送代码
+    CREATE_MR = "180"                # 创建 Merge Request
+    DONE = "200"                     # 完成
 
 
-# 状态转换表
+# =============================================================================
+# 状态转换表 — 方案 v4 §5.1 状态图
+# =============================================================================
+
 TRANSITIONS: dict[str, str | None] = {
     State.INIT: State.WARMUP_CHECK,
     State.WARMUP_CHECK: State.SUMMARY_REFRESH,
@@ -57,15 +78,15 @@ TRANSITIONS: dict[str, str | None] = {
     State.LOAD_REQUIREMENT: State.RETRIEVE_CONTEXT,
     State.RETRIEVE_CONTEXT: State.UNDERSTAND_REQUIREMENT,
     State.UNDERSTAND_REQUIREMENT: State.CLARIFICATION_GATE,
-    State.CLARIFICATION_GATE: State.PLAN_IMPLEMENTATION,
-    State.ASK_HUMAN: State.WAITING_CLARIFICATION,
-    State.WAITING_CLARIFICATION: None,
-    State.RESUME_WITH_ANSWER: State.RETRIEVE_CONTEXT,
+    State.CLARIFICATION_GATE: State.PLAN_IMPLEMENTATION,      # 清晰 → 计划
+    State.ASK_HUMAN: State.WAITING_CLARIFICATION,             # 不清楚 → 暂停
+    State.WAITING_CLARIFICATION: None,                        # 终端：等待人工
+    State.RESUME_WITH_ANSWER: State.RETRIEVE_CONTEXT,         # 恢复 → 重新理解
     State.PLAN_IMPLEMENTATION: State.CREATE_BRANCH,
     State.CREATE_BRANCH: State.IMPLEMENT,
     State.IMPLEMENT: State.CHANGE_SCOPE_GUARD,
     State.CHANGE_SCOPE_GUARD: State.DATABASE_IMPACT_DETECT,
-    State.DATABASE_IMPACT_DETECT: State.PREPARE_COMMIT,
+    State.DATABASE_IMPACT_DETECT: State.PREPARE_COMMIT,       # 不涉及DB → 提交
     State.GENERATE_DB_IMPACT_REPORT: State.PREPARE_COMMIT,
     State.GENERATE_MIGRATION_DRAFT: State.PREPARE_COMMIT,
     State.PREPARE_COMMIT: State.COMMIT,
@@ -74,6 +95,10 @@ TRANSITIONS: dict[str, str | None] = {
     State.CREATE_MR: State.DONE,
     State.DONE: None,
 }
+
+# =============================================================================
+# 状态中文名 — 用于日志和进度输出
+# =============================================================================
 
 STATE_NAMES: dict[str, str] = {
     State.INIT: "初始化",
@@ -102,8 +127,28 @@ STATE_NAMES: dict[str, str] = {
 }
 
 
+# =============================================================================
+# RunState — 运行持久化状态（方案 v4 §10.2）
+# =============================================================================
+
 class RunState:
-    """一次运行的持久化状态"""
+    """
+    一次 agent 运行的完整状态快照。
+
+    字段说明：
+        run_id:          运行唯一标识，格式 "YYYYMMDD-HHMMSS"
+        requirement:     原始需求文本
+        current_state:   当前状态码（三位数）
+        status:          运行状态："running" | "paused" | "completed" | "failed"
+        files_changed:   已修改的文件路径列表
+        lines_changed:   修改总行数（估算）
+        branch_name:     Git 分支名
+        commit_hash:     Git commit SHA
+        mr_url:          Merge Request URL
+        errors:          错误信息列表
+        transcript:      关键步骤记录列表
+        created_at:      创建时间 ISO8601
+    """
 
     def __init__(self, run_id: str, requirement: str = ""):
         self.run_id = run_id
@@ -120,6 +165,7 @@ class RunState:
         self.created_at = datetime.now().isoformat()
 
     def to_dict(self) -> dict:
+        """序列化为字典，用于持久化到 .agent/runs/{run_id}/state.json"""
         return {
             "run_id": self.run_id,
             "requirement": self.requirement,
@@ -137,6 +183,7 @@ class RunState:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RunState":
+        """从字典反序列化，用于从 state.json 恢复运行"""
         rs = cls(data["run_id"], data.get("requirement", ""))
         rs.current_state = data.get("current_state", State.INIT)
         rs.status = data.get("status", "running")
@@ -151,16 +198,42 @@ class RunState:
         return rs
 
 
+# =============================================================================
+# Orchestrator — 核心编排器
+# =============================================================================
+
 class Orchestrator:
     """
     核心编排器 — 驱动状态机完成从需求到 MR 的全流程。
-    v0.1: LLM 作为主要决策引擎。
+
+    特性（v0.1）：
+      - LLM 作为主要决策引擎（理解需求、计划、生成代码）
+      - 真实 Git 操作（branch/commit/push）
+      - 结构化日志追踪（每个状态转换记录耗时和结果）
+      - 工作区保护（脏工作区阻止运行）
+      - 变更范围护栏（超限报警）
+
+    使用方式：
+        config = load_config()
+        orch = Orchestrator(config)
+        orch.run("在 README.md 添加 Features 章节")
     """
 
     def __init__(self, config: AppConfig):
+        """
+        初始化编排器。
+
+        参数：
+            config: AppConfig 实例，从 config.yaml 加载
+        """
         self.config = config
         self.llm = LLMClient(config)
         self.run_state: RunState | None = None
+
+        # ★ 初始化日志追踪器
+        self.tracer: Tracer = get_tracer()
+
+        # ── 状态 → 处理器映射表 ──
         self._handlers: dict[str, Callable] = {
             State.INIT: self._handle_init,
             State.WARMUP_CHECK: self._handle_warmup_check,
@@ -183,63 +256,114 @@ class Orchestrator:
             State.DONE: self._handle_done,
         }
 
-    # ── 公开 API ──
+    # ==================================================================
+    # 公开 API
+    # ==================================================================
 
     def run(self, requirement_text: str) -> dict:
-        """从 INIT 到 DONE 的完整流程"""
+        """
+        从 INIT 到 DONE 的完整流程。
+
+        参数：
+            requirement_text: 需求描述文本（Markdown/纯文本均可）
+
+        返回：
+            dict: 运行状态字典，包含 run_id、状态、文件变更等
+
+        异常：
+            RuntimeError: Git 操作失败时抛出
+            httpx.HTTPError: LLM API 调用失败时抛出
+
+        日志追踪：
+            每条日志自动携带 run_id，方便 grep 定位单次运行
+        """
+        # ── 生成运行 ID ──
         run_id = f"{date.today().strftime('%Y%m%d')}-{datetime.now().strftime('%H%M%S')}"
         self.run_state = RunState(run_id, requirement_text)
         self._ensure_run_dir()
+
+        # ★ 设置追踪上下文（后续所有日志自动带 run_id）
+        self.tracer.set_run_id(run_id)
+        self.tracer.info("agent.run.start", step="000", detail=requirement_text[:200])
 
         print(f"\n🚀 Agent 运行 [{run_id}]")
         print(f"📋 {requirement_text[:100]}...\n")
 
         try:
+            # ── 状态机主循环 ──
             while self.run_state.current_state != State.DONE:
                 state = self.run_state.current_state
                 name = STATE_NAMES.get(state, state)
-                print(f"  [{state}] {name}...")
+                step_code = state  # 三位数状态码，用于日志追踪
+
+                # ── 保存当前状态快照 ──
                 self._save_state()
 
+                # ── 执行状态处理器（★ 带日志 span） ──
                 handler = self._handlers.get(state)
                 if handler:
-                    result = handler()
-                    if result == "PAUSE":
-                        self.run_state.status = "paused"
-                        self._save_state()
-                        return self.run_state.to_dict()
+                    with self.tracer.span(f"state.{name}", step=step_code):
+                        result = handler()
+                        if result == "PAUSE":
+                            # 需要人工介入，暂停状态机
+                            self.run_state.status = "paused"
+                            self._save_state()
+                            self.tracer.info("agent.run.paused", step=step_code)
+                            return self.run_state.to_dict()
 
-                # 自动转换
+                # ── 状态自动转换 ──
                 next_state = TRANSITIONS.get(state)
                 if next_state:
                     self.run_state.current_state = next_state
                 elif state == State.DONE:
                     break
                 elif state == State.WAITING_CLARIFICATION:
+                    # 等待人类回复，暂停
                     self.run_state.status = "paused"
                     self._save_state()
+                    self.tracer.info("agent.run.waiting_clarification", step=step_code)
                     return self.run_state.to_dict()
 
         except Exception as e:
-            logger.exception(f"异常: {e}")
+            # ★ 记录异常到追踪日志
+            self.tracer.error("agent.run.error", step=self.run_state.current_state, detail=str(e))
+            logger.exception(f"运行异常: {e}")
             self.run_state.errors.append(str(e))
             self.run_state.status = "failed"
             self._save_state()
             raise
 
+        # ── 完成 ──
         self.run_state.status = "completed"
         self._save_state()
+        self.tracer.info("agent.run.done", step="200", detail=self.run_state.mr_url)
         print(f"\n✅ 完成 [{run_id}]")
         return self.run_state.to_dict()
 
     def resume(self, run_id: str) -> dict:
-        """从保存的状态恢复"""
+        """
+        从保存的状态文件恢复执行。
+
+        参数：
+            run_id: 运行 ID（.agent/runs/ 下的目录名）
+
+        返回：
+            dict: 运行状态字典
+
+        异常：
+            FileNotFoundError: 状态文件不存在时抛出
+        """
         state_path = Path(f".agent/runs/{run_id}/state.json")
         if not state_path.exists():
             raise FileNotFoundError(f"状态不存在: {state_path}")
 
         data = json.loads(state_path.read_text())
         self.run_state = RunState.from_dict(data)
+
+        # ★ 恢复追踪上下文
+        self.tracer.set_run_id(run_id)
+        self.tracer.info("agent.resume", step=self.run_state.current_state,
+                          detail=f"从 {STATE_NAMES.get(self.run_state.current_state)} 恢复")
 
         if self.run_state.status == "completed":
             print(f"✅ [{run_id}] 已完成")
@@ -248,165 +372,478 @@ class Orchestrator:
         print(f"\n🔄 恢复 [{run_id}] @ {STATE_NAMES.get(self.run_state.current_state)}")
         return self.run(requirement_text=self.run_state.requirement)
 
-    # ── 状态处理器 ──
+    # ==================================================================
+    # 状态处理器 — 每个状态一个方法
+    # ==================================================================
 
     def _handle_init(self):
+        """
+        [000] 初始化 — 输出项目基本信息。
+
+        日志：记录项目名称和配置摘要
+        """
+        self.tracer.debug("state.init", step="000",
+                          detail={"project": self.config.project.name,
+                                  "model": self.config.runtime.llm_model})
         print(f"    项目: {self.config.project.name}")
 
     def _handle_warmup_check(self):
+        """
+        [010] 检查知识库是否存在。
+
+        v0.1 简化实现：仅检查 .agent/knowledge/ 目录是否存在。
+        v0.2 计划：验证知识库新鲜度，过期则提示重建。
+
+        日志：记录知识库路径和存在状态
+        """
         kb_path = Path(".agent/knowledge")
-        print(f"    {'✅' if kb_path.exists() else '⚠️ 未构建'}")
+        exists = kb_path.exists()
+        self.tracer.debug("state.warmup_check", step="010",
+                          detail={"path": str(kb_path), "exists": exists})
+        print(f"    {'✅ 已构建' if exists else '⚠️ 未构建，请先运行 agent warmup'}")
 
     def _handle_summary_refresh(self):
-        self.run_state.transcript.append({"state": "SUMMARY_REFRESH", "ts": datetime.now().isoformat()})
+        """
+        [015] 刷新第一层摘要（Summary 层）。
+
+        实际刷新在 warmup 阶段完成，此处仅记录时间戳。
+        方案 v4 §4.1：Summary 层每次 run 前自动刷新。
+
+        日志：记录刷新时间戳
+        """
+        ts = datetime.now().isoformat()
+        self.run_state.transcript.append({"state": "SUMMARY_REFRESH", "ts": ts})
+        self.tracer.debug("state.summary_refresh", step="015", detail=ts)
 
     def _handle_worktree_guard(self):
+        """
+        [018] 工作区保护检查 — 确保工作区干净才能继续。
+
+        流程：
+          1. 读取配置中的 worktree_policy
+          2. 执行 git status --porcelain 检查变更
+          3. 如果允许未跟踪文件且仅有未跟踪文件 → 通过
+          4. 如果有已跟踪文件的修改 → 抛出 RuntimeError
+
+        方案 v4 §8.1：require_clean_before_run=true 强制要求干净工作区
+
+        日志：记录文件变更数、状态（clean/dirty）
+        """
         require_clean = self.config.git.worktree_policy.require_clean_before_run
         allow_untracked = self.config.git.worktree_policy.allow_untracked
+
+        # ── 策略允许跳过检查 ──
         if not require_clean:
+            self.tracer.debug("state.worktree_guard", step="018", detail="策略跳过")
             print("    ⏭️ 跳过工作区检查（策略配置）")
             return
+
+        # ── 执行 git status ──
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, check=True
         )
         lines = result.stdout.strip().splitlines()
+
+        # ── 干净工作区 ──
         if not lines:
+            self.tracer.debug("state.worktree_guard", step="018",
+                              detail={"status": "clean"})
             print("    ✅ 工作区干净")
             return
-        if allow_untracked:
-            # 过滤掉 ?? 开头（未跟踪）的行
-            dirty = [l for l in lines if not l.startswith("??")]
-            if not dirty:
-                print("    ✅ 仅存在未跟踪文件（允许）")
-                return
-            raise RuntimeError(
-                f"工作区有已跟踪文件的未提交修改:\n" + "\n".join(dirty)
-            )
+
+        # ── 过滤分析变更类型 ──
+        # git status --porcelain 格式：XY filename
+        #   X=暂存区状态, Y=工作区状态
+        #   ?? = 未跟踪
+        untracked_only = all(line.startswith("??") for line in lines)
+
+        # ── 允许未跟踪文件 ──
+        if allow_untracked and untracked_only:
+            self.tracer.debug("state.worktree_guard", step="018",
+                              detail={"status": "untracked_only", "count": len(lines)})
+            print("    ✅ 仅存在未跟踪文件（允许）")
+            return
+
+        # ── 筛选已跟踪文件的修改 ──
+        dirty = [l for l in lines if not l.startswith("??")]
+        count = len(dirty)
+
+        # ── 抛出错误（阻止运行） ──
+        self.tracer.warning("state.worktree_guard", step="018",
+                            detail={"status": "dirty", "count": count, "files": dirty[:10]})
         raise RuntimeError(
-            f"工作区不干净，有未提交的修改:\n" + "\n".join(lines)
+            f"工作区不干净，有 {count} 个未提交修改:\n" +
+            "\n".join(f"  {l}" for l in dirty[:10])
         )
 
     def _handle_load_requirement(self):
-        print(f"    {len(self.run_state.requirement)} 字符")
+        """
+        [020] 加载需求 — 记录需求文本基本信息。
+
+        日志：记录需求字符数（用于后续 token 估算）
+        """
+        length = len(self.run_state.requirement)
+        self.tracer.debug("state.load_requirement", step="020",
+                          detail={"chars": length})
+        print(f"    需求长度: {length} 字符")
 
     def _handle_retrieve_context(self):
+        """
+        [030] 检索上下文 — 用 LLM 初步分析需求。
+
+        将需求前 500 字符发送给 LLM，获取初步理解。
+        v0.1 简化：不做完整的 RAG 检索。
+        v0.2 计划：Knowledge MCP 三层检索。
+
+        日志：记录 LLM 调用详情
+        """
+        self.tracer.debug("state.retrieve_context", step="030",
+                          detail={"input_chars": min(500, len(self.run_state.requirement))})
         _ = self.llm.chat_with_system(f"分析需求: {self.run_state.requirement[:500]}")
 
     def _handle_understand_requirement(self):
+        """
+        [040] 理解需求 — 占位。
+
+        v0.1：不在此处做额外处理，理解结果已在 RETRIEVE_CONTEXT 中获取。
+        v0.2 计划：结构化需求解析（提取模块、接口、数据模型变更）。
+        """
         pass
 
     def _handle_clarification_gate(self):
+        """
+        [050] 澄清判断闸门 — 判断需求是否足够清晰。
+
+        流程：
+          1. 将需求发送给 LLM
+          2. LLM 返回 "CLEAR" → 继续执行
+          3. LLM 返回问题列表 → 切换到 ASK_HUMAN 状态
+
+        日志：记录 LLM 判断结果
+        """
+        self.tracer.debug("state.clarification_gate", step="050")
         resp = self.llm.chat_with_system(
             f"判断需求是否清晰。清晰回复 CLEAR，否则列出问题:\n{self.run_state.requirement}"
         )
         content = self.llm.extract_content(resp)
-        if "CLEAR" in content.upper():
-            print("    ✅ 清晰")
+        is_clear = "CLEAR" in content.upper()
+
+        self.tracer.debug("state.clarification_gate", step="050",
+                          detail={"clear": is_clear})
+
+        if is_clear:
+            print("    ✅ 需求清晰")
         else:
+            # ── 需求不清晰，转向提问 ──
             self.run_state.current_state = State.ASK_HUMAN
+            self.tracer.info("state.clarification_gate", step="050",
+                             detail="需求不清晰，转向 ASK_HUMAN")
 
     def _handle_ask_human(self):
-        questions = self.llm.chat_with_system(f"为此需求列出最多5个问题:\n{self.run_state.requirement}")
-        print(f"    {self.llm.extract_content(questions)}")
+        """
+        [060] 生成澄清问题 — LLM 列出最多 5 个问题。
+
+        流程：
+          1. LLM 分析需求中的模糊点
+          2. 生成结构化问题列表
+          3. 暂停状态机，等待人类回复
+
+        返回：
+            "PAUSE" — 通知主循环暂停
+
+        日志：记录生成的问题
+        """
+        questions = self.llm.chat_with_system(
+            f"为此需求列出最多5个需要澄清的问题:\n{self.run_state.requirement}"
+        )
+        content = self.llm.extract_content(questions)
+        self.tracer.info("state.ask_human", step="060", detail=content)
+        print(f"    ❓ 需要澄清:\n{content}")
         return "PAUSE"
 
     def _handle_plan_implementation(self):
+        """
+        [100] 生成实施计划 — LLM 规划文件列表和步骤。
+
+        流程：
+          1. LLM 分析需求生成计划
+          2. 计划持久化到 transcript
+
+        日志：记录生成的计划
+        """
+        self.tracer.debug("state.plan_implementation.start", step="100")
         print("    📐 生成计划...")
+
         plan = self.llm.chat_with_system(
             f"为此需求生成实施计划（文件列表+步骤）:\n{self.run_state.requirement}"
         )
+        plan_text = self.llm.extract_content(plan)
+
+        # ── 持久化计划 ──
         self.run_state.transcript.append({
-            "state": "PLAN", "plan": self.llm.extract_content(plan),
+            "state": "PLAN",
+            "plan": plan_text,
             "ts": datetime.now().isoformat()
         })
+        self.tracer.info("state.plan_implementation", step="100",
+                         detail=plan_text[:200])
+        print(f"    📋 {plan_text[:150]}...")
 
     def _handle_create_branch(self):
-        prefix = self.config.git.branch_prefix
+        """
+        [110] 创建 Git 分支 — 以 agent/ 前缀创建新分支。
+
+        流程：
+          1. 从 config 读取分支前缀和命名模板
+          2. 生成分支名（格式：agent/YYYYMMDD-auto）
+          3. 执行 git checkout -b <branch>
+
+        安全约束：
+          - 分支名必须以 agent/ 开头（方案 v4 §8.3）
+          - 禁止操作 master/main/release/hotfix
+
+        日志：记录分支名和创建结果
+        """
+        prefix = self.config.git.branch_prefix  # 默认 "agent/"
         slug = date.today().strftime("%Y%m%d") + "-auto"
         branch = prefix + slug
         self.run_state.branch_name = branch
+
+        self.tracer.debug("state.create_branch.start", step="110",
+                          detail={"branch": branch})
+
+        # ── 执行 git checkout -b ──
         result = subprocess.run(
             ["git", "checkout", "-b", branch],
             capture_output=True, text=True
         )
         if result.returncode != 0:
+            self.tracer.error("state.create_branch", step="110",
+                              detail={"branch": branch, "error": result.stderr.strip()})
             raise RuntimeError(f"创建分支失败: {result.stderr.strip()}")
+
+        self.tracer.info("state.create_branch", step="110",
+                         detail={"branch": branch})
         print(f"    🌿 分支已创建: {branch}")
 
     def _handle_implement(self):
+        """
+        [120] 修改代码 — LLM 生成代码变更并写入文件。
+
+        流程：
+          1. 将需求和计划发送给 LLM
+          2. LLM 返回 @@FILE:path@@ ... 格式的代码块
+          3. 解析代码块，写入文件
+          4. 记录变更文件列表
+
+        LLM 输出格式要求：
+            @@FILE:README.md@@
+            修改后的完整内容...
+            @@FILE:src/main.py@@
+            修改后的完整内容...
+
+        日志：记录 LLM 调用和文件变更列表
+        """
+        self.tracer.debug("state.implement.start", step="120")
         print("    ✏️ 生成代码修改...")
+
         changes = self.llm.chat_with_system(
             f"根据需求生成代码修改。对每个文件用 @@FILE:path@@ 标记后跟完整内容:\n{self.run_state.requirement}"
         )
         content = self.llm.extract_content(changes)
+
+        # ── 解析 LLM 返回的文件块 ──
         file_blocks = re.split(r"@@FILE:(.+?)@@", content)
         for i in range(1, len(file_blocks), 2):
             if i + 1 < len(file_blocks):
-                fpath = file_blocks[i].strip()
-                code = file_blocks[i + 1].strip()
+                fpath = file_blocks[i].strip()         # 文件路径
+                code = file_blocks[i + 1].strip()      # 文件内容
                 if fpath and code:
                     pf = Path(fpath)
                     pf.parent.mkdir(parents=True, exist_ok=True)
-                    pf.write_text(code)
+                    pf.write_text(code, encoding="utf-8")
                     self.run_state.files_changed.append(fpath)
-                    print(f"    📝 {fpath}")
-        print(f"    ✅ {len(self.run_state.files_changed)} 文件")
+                    # ── 计算行数（估算） ──
+                    self.run_state.lines_changed += len(code.splitlines())
+
+        file_count = len(self.run_state.files_changed)
+        self.tracer.info("state.implement", step="120",
+                         detail={"files": file_count, "lines": self.run_state.lines_changed,
+                                 "paths": self.run_state.files_changed})
+        print(f"    ✅ {file_count} 文件, ~{self.run_state.lines_changed} 行")
 
     def _handle_change_scope_guard(self):
+        """
+        [125] 变更范围护栏 — 检查是否超出允许的变更范围。
+
+        检查项（方案 v4 §8.2）：
+          - 文件数是否超过 max_files_changed（默认 20）
+          - 行数是否超过 max_lines_changed（默认 800）
+          - 是否触碰到 deny_paths 中的受保护文件
+
+        v0.1 简化：仅检查文件数量。
+        v0.2 计划：完整实现 deny_paths 匹配和行数检查。
+
+        日志：记录文件数和是否超限
+        """
         policy = self.config.change_policy
         n = len(self.run_state.files_changed)
-        ok = n <= policy.max_files_changed
-        print(f"    {'✅' if ok else '⚠️'} {n} 文件 (限制: {policy.max_files_changed})")
+        within_limit = n <= policy.max_files_changed
+
+        self.tracer.info("state.change_scope_guard", step="125",
+                         detail={"files": n, "limit": policy.max_files_changed,
+                                 "ok": within_limit})
+
+        if within_limit:
+            print(f"    ✅ {n} 文件 (限制: {policy.max_files_changed})")
+        else:
+            print(f"    ⚠️ {n} 文件超限 (限制: {policy.max_files_changed})")
+            self.tracer.warning("state.change_scope_guard", step="125",
+                                detail="文件数超出限制")
 
     def _handle_database_impact_detect(self):
+        """
+        [130] 数据库影响检测 — 分析代码变更是否涉及数据库。
+
+        v0.1：跳过数据库检测（方案 v4 §2.1: Database MCP 只做 DDL 索引）。
+        v0.2 计划：基于 DDL 索引检测表结构变更影响。
+
+        日志：标记跳过
+        """
+        self.tracer.debug("state.database_impact_detect", step="130",
+                          detail="v0.1 跳过")
         print("    ℹ️ v0.1: 跳过数据库检测")
 
     def _handle_prepare_commit(self):
+        """
+        [150] 准备提交 — 记录提交前的文件快照。
+
+        将变更文件列表写入 transcript，供 MR 描述生成使用。
+
+        日志：记录文件列表
+        """
+        self.tracer.debug("state.prepare_commit", step="150",
+                          detail={"files": self.run_state.files_changed})
         self.run_state.transcript.append({
-            "state": "PREPARE_COMMIT", "files": self.run_state.files_changed,
+            "state": "PREPARE_COMMIT",
+            "files": self.run_state.files_changed,
             "ts": datetime.now().isoformat()
         })
 
     def _handle_commit(self):
+        """
+        [160] 执行 Git Commit — 暂存并提交所有变更。
+
+        流程：
+          1. 检查是否有文件需要提交
+          2. git add -- <files> 暂存变更文件
+          3. git commit -m <message> 提交
+          4. 提取 commit SHA 用于日志追踪
+
+        Commit Message 格式（方案 v4 §8.4）：
+          feat: <需求摘要前 80 字符>
+
+        日志：记录 commit SHA、文件列表和消息
+        """
         files = self.run_state.files_changed
         if not files:
             raise RuntimeError("没有文件需要提交")
+
+        self.tracer.debug("state.commit.start", step="160",
+                          detail={"files": files})
+
+        # ── 暂存文件 ──
         add_result = subprocess.run(
             ["git", "add", "--"] + files,
             capture_output=True, text=True
         )
         if add_result.returncode != 0:
+            self.tracer.error("state.commit.add_failed", step="160",
+                              detail=add_result.stderr.strip())
             raise RuntimeError(f"git add 失败: {add_result.stderr.strip()}")
+
+        # ── 生成 Commit Message ──
         msg = f"feat: {self.run_state.requirement[:80]}"
+
+        # ── 执行 Commit ──
         commit_result = subprocess.run(
             ["git", "commit", "-m", msg],
             capture_output=True, text=True
         )
         if commit_result.returncode != 0:
+            self.tracer.error("state.commit.failed", step="160",
+                              detail=commit_result.stderr.strip())
             raise RuntimeError(f"git commit 失败: {commit_result.stderr.strip()}")
-        # 从输出中提取 commit hash
+
+        # ── 提取 Commit SHA ──
+        # git commit 输出格式：[branch <sha>] message
         output = (commit_result.stdout + commit_result.stderr).strip()
         match = re.search(r"\[[^\]]+\s+([a-f0-9]+)", output)
         self.run_state.commit_hash = match.group(1) if match else "unknown"
-        print(f"    💾 {msg}")
+
+        self.tracer.info("state.commit", step="160",
+                         detail={"sha": self.run_state.commit_hash,
+                                 "files": len(files),
+                                 "message": msg})
+        print(f"    💾 [{self.run_state.commit_hash}] {msg}")
 
     def _handle_push(self):
+        """
+        [170] 推送代码 — git push origin <branch>。
+
+        安全约束（方案 v4 §8.3）：
+          - 仅允许推送 agent/ 开头的分支
+          - 禁止推送 master/main/release/hotfix
+          - 禁止 force push
+
+        日志：记录推送的分支名和结果
+        """
         branch = self.run_state.branch_name
+
+        # ── 安全校验：分支名必须以 agent/ 开头 ──
         if not branch.startswith("agent/"):
+            self.tracer.error("state.push.blocked", step="170",
+                              detail=f"禁止推送非 agent/ 分支: {branch}")
             raise RuntimeError(
                 f"分支名 {branch} 不以 agent/ 开头，禁止推送"
             )
+
+        self.tracer.debug("state.push.start", step="170",
+                          detail={"branch": branch})
+
+        # ── 执行 git push ──
         result = subprocess.run(
             ["git", "push", "origin", branch],
             capture_output=True, text=True
         )
         if result.returncode != 0:
+            self.tracer.error("state.push.failed", step="170",
+                              detail=result.stderr.strip())
             raise RuntimeError(f"git push 失败: {result.stderr.strip()}")
-        print(f"    🚀 已推送 {branch}")
+
+        self.tracer.info("state.push", step="170",
+                         detail={"branch": branch})
+        print(f"    🚀 已推送 {branch} → origin")
 
     def _handle_create_mr(self):
-        # 获取远端 URL，生成真实的 MR 链接
+        """
+        [180] 创建 Merge Request — 生成 MR 描述并输出链接。
+
+        流程：
+          1. 获取 git remote URL
+          2. 解析 GitHub URL，构造 PR 链接
+          3. 生成 MR 描述文件（Markdown）
+          4. 写入 .agent/runs/{run_id}/mr_description.md
+
+        MR 描述模板（方案 v4 §12.1）：
+          包含变更文件清单、需求摘要、Review 检查项
+
+        日志：记录 MR URL 和描述文件路径
+        """
+        self.tracer.debug("state.create_mr.start", step="180")
+
+        # ── 获取远端 URL 并构造 MR 链接 ──
         mr_url = ""
         try:
             remote_result = subprocess.run(
@@ -414,37 +851,73 @@ class Orchestrator:
                 capture_output=True, text=True, check=True
             )
             remote_url = remote_result.stdout.strip()
-            # 解析 remote URL，构造 MR/PR 链接
-            # 支持 git@github.com:owner/repo.git 和 https://github.com/owner/repo.git
-            r = remote_url
-            if "github.com" in r:
-                m = re.search(r"github\.com[:\/](.+?)(?:\.git)?$", r)
+
+            # ── 解析 GitHub URL ──
+            # 支持格式：
+            #   git@github.com:owner/repo.git
+            #   https://github.com/owner/repo.git
+            if "github.com" in remote_url:
+                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
                 if m:
                     repo_path = m.group(1)
-                    mr_url = f"https://github.com/{repo_path}/pull/new/{self.run_state.branch_name}"
+                    mr_url = (
+                        f"https://github.com/{repo_path}/pull/new/"
+                        f"{self.run_state.branch_name}"
+                    )
                 else:
-                    mr_url = f"MR 链接: {r} (分支: {self.run_state.branch_name})"
+                    mr_url = f"MR: {remote_url} (分支: {self.run_state.branch_name})"
             else:
-                mr_url = f"MR 链接: {r} (分支: {self.run_state.branch_name})"
+                mr_url = f"MR: {remote_url} (分支: {self.run_state.branch_name})"
         except subprocess.CalledProcessError:
-            mr_url = f"MR 链接不可用（无法获取 remote URL），分支: {self.run_state.branch_name}"
+            mr_url = f"MR 链接不可用，分支: {self.run_state.branch_name}"
+
         self.run_state.mr_url = mr_url
-        # 写 MR 描述文件
+
+        # ── 生成并写入 MR 描述 ──
         mr_desc = self._gen_mr_desc()
         dp = Path(f".agent/runs/{self.run_state.run_id}/mr_description.md")
-        dp.write_text(mr_desc)
+        dp.write_text(mr_desc, encoding="utf-8")
+
+        self.tracer.info("state.create_mr", step="180",
+                         detail={"url": mr_url, "desc_file": str(dp)})
         print(f"    📬 {mr_url}")
 
     def _handle_done(self):
+        """
+        [200] 完成 — 输出最终结果。
+
+        日志：记录完成状态和 MR URL
+        """
+        self.tracer.info("state.done", step="200",
+                         detail={"mr_url": self.run_state.mr_url,
+                                 "files": len(self.run_state.files_changed),
+                                 "commit": self.run_state.commit_hash})
         print(f"    🎉 MR: {self.run_state.mr_url}")
 
-    # ── 辅助 ──
+    # ==================================================================
+    # 辅助方法
+    # ==================================================================
 
     def _gen_mr_desc(self) -> str:
+        """
+        生成 MR 描述（Markdown 格式）。
+
+        模板包含（方案 v4 §12.1）：
+          - 已执行步骤清单（含勾选框）
+          - 未执行步骤（单元测试等）
+          - 变更文件列表
+          - 需求原文
+          - Reviewer 注意事项
+
+        返回：
+            str: Markdown 格式的 MR 描述
+        """
         files = "\n".join(f"- `{f}`" for f in self.run_state.files_changed)
         return f"""## Agent 自动生成 MR
 
+### 执行情况
 - [x] 需求读取
+- [x] 上下文检索
 - [x] 代码修改
 - [x] commit & push
 - [ ] 单元测试（未执行）
@@ -453,55 +926,97 @@ class Orchestrator:
 ### 变更文件
 {files}
 
-### 需求
+### 需求原文
 {self.run_state.requirement}
 
-> ⚠️ Agent 自动生成，请 Review
+### Reviewer 注意事项
+1. 请检查业务逻辑正确性
+2. 请确认边界条件处理
+3. 请评估是否需要补充测试
+
+> ⚠️ 此 MR 由 neiWangAgent 自动生成，请人工 Review 后合并
 """
 
     def _ensure_run_dir(self):
+        """
+        确保运行目录存在。
+
+        创建路径：.agent/runs/{run_id}/
+        """
         Path(f".agent/runs/{self.run_state.run_id}").mkdir(parents=True, exist_ok=True)
 
     def _save_state(self):
+        """
+        持久化当前运行状态到 .agent/runs/{run_id}/state.json。
+
+        每次状态转换后自动调用，确保即使崩溃也能恢复。
+        """
         if self.run_state:
             self._ensure_run_dir()
             p = Path(f".agent/runs/{self.run_state.run_id}/state.json")
-            p.write_text(json.dumps(self.run_state.to_dict(), indent=2, ensure_ascii=False))
+            p.write_text(
+                json.dumps(self.run_state.to_dict(), indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
 
     def close(self):
+        """
+        关闭 LLM 客户端，释放 HTTP 连接。
+        """
         self.llm.close()
+        self.tracer.debug("agent.shutdown")
 
     def warmup(self) -> dict:
-        """知识库预热 — 三层预理解模型"""
-        from agent_mcp.knowledge_server import KnowledgeMCPServer
-        ks = KnowledgeMCPServer()
+        """
+        知识库预热 — 三层预理解模型（方案 v4 §4.1）。
 
+        依次执行：
+          1. Summary 层 — 代码库文件索引
+          2. Hotspot 层 — 核心模块分析
+          3. Deep 层    — 深度代码索引
+
+        预热结果持久化到 .agent/knowledge/state.json
+
+        返回：
+            dict: 包含各层索引结果的字典
+
+        日志：每层的文件数和耗时
+        """
+        from agent_mcp.knowledge_server import KnowledgeMCPServer
+
+        self.tracer.info("agent.warmup.start")
+        ks = KnowledgeMCPServer()
         repo = str(Path.cwd())
         result = {"layers": {}, "files_total": 0}
 
-        # Summary 层
-        print("  [summary] 扫描代码库...")
-        r = ks._index_codebase(repo, "summary")
-        result["layers"]["summary"] = r
-        result["files_total"] += r.get("files_indexed", 0)
-        print(f"  [summary] {r.get('files_indexed', 0)} 个文件")
+        # ── Summary 层 — 项目结构概览 ──
+        with self.tracer.span("warmup.summary"):
+            print("  [summary] 扫描代码库...")
+            r = ks._index_codebase(repo, "summary")
+            result["layers"]["summary"] = r
+            result["files_total"] += r.get("files_indexed", 0)
+            print(f"  [summary] {r.get('files_indexed', 0)} 个文件")
 
-        # Hotspot 层
-        print("  [hotspot] 分析核心模块...")
-        r = ks._index_codebase(repo, "hotspot")
-        result["layers"]["hotspot"] = r
-        print(f"  [hotspot] {r.get('message', '完成')}")
+        # ── Hotspot 层 — 核心模块分析 ──
+        with self.tracer.span("warmup.hotspot"):
+            print("  [hotspot] 分析核心模块...")
+            r = ks._index_codebase(repo, "hotspot")
+            result["layers"]["hotspot"] = r
+            print(f"  [hotspot] {r.get('message', '完成')}")
 
-        # Deep 层
-        print("  [deep] 深度索引...")
-        r = ks._index_codebase(repo, "deep")
-        result["layers"]["deep"] = r
-        print(f"  [deep] {r.get('message', '完成')}")
+        # ── Deep 层 — 深度索引 ──
+        with self.tracer.span("warmup.deep"):
+            print("  [deep] 深度索引...")
+            r = ks._index_codebase(repo, "deep")
+            result["layers"]["deep"] = r
+            print(f"  [deep] {r.get('message', '完成')}")
 
-        # 保存知识库状态
+        # ── 保存知识库状态 ──
         Path(".agent/knowledge").mkdir(parents=True, exist_ok=True)
         kb_path = Path(".agent/knowledge/state.json")
         kb_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
+        self.tracer.info("agent.warmup.done",
+                         detail={"files_total": result["files_total"]})
         print(f"\n✅ 预热完成，共索引 {result['files_total']} 个文件")
         return result
