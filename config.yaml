@@ -4,7 +4,7 @@
 
 project:
   name: "neiWangAgent"
-  default_branch: "master"
+  default_branch: "main"
   code_platform: "github"
 
 runtime:
@@ -48,7 +48,7 @@ knowledge:
     summary:
       auto_refresh_before_run: true
       diff_base_strategy: "merge_base"
-      target_branch: "master"
+      target_branch: "main"
       max_recent_commits: 50
     hotspot:
       build_on_warmup: true
@@ -69,7 +69,7 @@ database:
     current_version_behavior: "never_execute_write_sql"
 
 git:
-  target_branch: "master"
+  target_branch: "main"
   branch_prefix: "agent/"
   branch_naming:
     template: "agent/{yyyyMMdd}-{task_slug}"
