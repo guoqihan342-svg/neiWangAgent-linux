@@ -1,0 +1,94 @@
+# =============================================================================
+# neiWangAgent — Configuration
+# =============================================================================
+
+project:
+  name: "neiWangAgent"
+  default_branch: "master"
+  code_platform: "github"
+
+runtime:
+  mode: "local_mcp"
+  transport: "stdio"
+  llm_timeout_seconds: 120
+  mcp_timeout_seconds: 30
+  llm_base_url: "https://api.deepseek.com/v1"
+  llm_model: "deepseek-v4-flash"
+
+task:
+  stop_after_create_mr: true
+  enable_tests: false
+  enable_self_review: false
+  max_clarification_rounds: 3
+  max_questions_per_round: 5
+
+mcp:
+  servers:
+    knowledge:
+      command: "python"
+      args: ["-m", "agent_mcp.knowledge_server"]
+    requirement:
+      command: "python"
+      args: ["-m", "agent_mcp.requirement_server"]
+    database:
+      command: "python"
+      args: ["-m", "agent_mcp.database_server"]
+    git:
+      command: "python"
+      args: ["-m", "agent_mcp.git_server"]
+    mr:
+      command: "python"
+      args: ["-m", "agent_mcp.mr_server"]
+    clarification:
+      command: "python"
+      args: ["-m", "agent_mcp.clarification_server"]
+
+knowledge:
+  layers:
+    summary:
+      auto_refresh_before_run: true
+      diff_base_strategy: "merge_base"
+      target_branch: "master"
+      max_recent_commits: 50
+    hotspot:
+      build_on_warmup: true
+      auto_refresh_interval: "24h"
+      max_commits_to_scan: 100
+      core_modules: []
+      blame_key_files: []
+    deep:
+      build_on_first_warmup: true
+      rebuild_trigger: "manual"
+  business_docs_dir: "./business-docs"
+
+database:
+  enabled: false
+  mode: "local_docs_and_code_only"
+  write_connection:
+    enabled: false
+    current_version_behavior: "never_execute_write_sql"
+
+git:
+  target_branch: "master"
+  branch_prefix: "agent/"
+  branch_naming:
+    template: "agent/{yyyyMMdd}-{task_slug}"
+  worktree_policy:
+    require_clean_before_run: true
+    allow_untracked: false
+  allow_commit: true
+  allow_push: true
+  allow_create_mr: true
+  allow_merge: false
+  allow_force_push: false
+  protected_branches: ["master", "main"]
+
+change_policy:
+  max_files_changed: 20
+  max_lines_changed: 800
+  deny_paths: ["pom.xml", "package-lock.json", ".env", "*.pem", "*.key"]
+
+security:
+  allowed_paths: [".", "./business-docs", "./.agent"]
+  deny_paths: ["~/.ssh", "~/.git-credentials", ".env", "*.pem", "*.key"]
+  blocked_commands: ["sudo", "rm -rf /", "kubectl"]

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.agent/runs/
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.deepseek/
+__pycache__/
+*.pyc
+.agent/knowledge/
+.agent/runs/
