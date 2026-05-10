@@ -5,23 +5,32 @@ configurable base URL / model via AppConfig, and structured prompting with a
 system prompt that describes the agent's state-machine role.
 
 API key is read from the DEEPSEEK_API_KEY environment variable.
+
+日志追踪：
+  每次 LLM 调用自动记录：
+    - 请求模型、消息数、工具数
+    - 响应 token 用量（如有）
+    - 耗时（毫秒级）
+    - 成功/失败状态
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from agent_mcp.config_loader import AppConfig
+from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # System prompt — describes the agent's role and state-machine flow
-# ---------------------------------------------------------------------------
+# =============================================================================
 SYSTEM_PROMPT = """\
 You are neiWangAgent, an autonomous coding agent that follows a strict state-machine flow.
 
@@ -44,9 +53,9 @@ Guidelines:
 """
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # LLMClient
-# ---------------------------------------------------------------------------
+# =============================================================================
 class LLMClient:
     """OpenAI-compatible chat-completion client backed by httpx.
 
@@ -55,6 +64,7 @@ class LLMClient:
         - Tool calling (function-calling / tool-use)
         - Configurable base URL, model, timeout from AppConfig
         - System-prompt helper for structured prompting
+        - ★ 结构化日志追踪（每次调用自动记录性能指标）
 
     Parameters
     ----------
@@ -68,19 +78,31 @@ class LLMClient:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
 
-        # --- Resolve settings from typed config ---
+        # ── Resolve settings from typed config ──
         self.base_url: str = config.runtime.llm_base_url.rstrip("/")
         self.model: str = config.runtime.llm_model
         self.timeout: int = config.runtime.llm_timeout_seconds
 
+        # ── API Key ──
+        # 从环境变量 DEEPSEEK_API_KEY 读取
+        # 不硬编码，避免泄露
         self.api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
         if not self.api_key:
             logger.warning(
                 "DEEPSEEK_API_KEY is not set — API calls will fail with 401/403."
             )
 
-        # --- Httpx client ---
-        proxy = os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("http_proxy")
+        # ★ 日志追踪器
+        self.tracer: Tracer = get_tracer()
+
+        # ── Httpx client ──
+        # 代理配置：优先读 https_proxy，其次 HTTPS_PROXY，最后 http_proxy
+        # WSL 环境通常通过 Clash 代理 (127.0.0.1:7890) 访问外部 API
+        proxy = (
+            os.environ.get("https_proxy")
+            or os.environ.get("HTTPS_PROXY")
+            or os.environ.get("http_proxy")
+        )
         client_kwargs = {
             "timeout": httpx.Timeout(self.timeout),
             "headers": {
@@ -89,8 +111,20 @@ class LLMClient:
             },
         }
         if proxy:
+            # ★ 记录代理配置
+            self.tracer.debug("llm.proxy_configured",
+                              detail={"proxy": proxy[:30] + "..." if len(proxy) > 30 else proxy})
             client_kwargs["proxy"] = proxy
+        else:
+            self.tracer.debug("llm.no_proxy")
+
         self._client = httpx.Client(**client_kwargs)
+
+        # ★ 初始化日志
+        self.tracer.debug("llm.client_init",
+                          detail={"model": self.model,
+                                  "base_url": self.base_url,
+                                  "timeout": self.timeout})
 
     # ------------------------------------------------------------------
     # Core chat method
@@ -113,9 +147,9 @@ class LLMClient:
         tools : list[dict] or None
             Optional list of tool-definition dicts (OpenAI function-calling format).
         temperature : float
-            Sampling temperature (0.0–2.0).
+            Sampling temperature (0.0–2.0). 默认 0.7。
         max_tokens : int
-            Maximum tokens in the response.
+            Maximum tokens in the response. 默认 4096。
         **kwargs
             Additional parameters forwarded to the API payload.
 
@@ -130,6 +164,9 @@ class LLMClient:
             If the server returns a 4xx/5xx status.
         httpx.RequestError
             On network-level failures (DNS, connection, timeout).
+
+        日志追踪：
+            记录请求参数（model, messages 数, tools 数）和响应时间
         """
         url = f"{self.base_url}/chat/completions"
 
@@ -145,15 +182,46 @@ class LLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        logger.debug(
-            "chat: model=%s msgs=%d tools=%d", self.model, len(messages), len(tools or [])
-        )
+        # ── 计算消息总字符数（用于日志追踪） ──
+        total_chars = sum(len(str(m.get("content", ""))) for m in messages)
 
+        # ★ 记录请求开始
+        self.tracer.debug("llm.request.start",
+                          detail={"model": self.model,
+                                  "messages": len(messages),
+                                  "chars": total_chars,
+                                  "tools": len(tools or [])})
+
+        # ── 发送请求（★ 带耗时追踪） ──
+        start_time = time.perf_counter()
         try:
             response = self._client.post(url, json=payload)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+
+            # ── 提取 token 用量 ──
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+
+            # ★ 记录请求成功
+            self.tracer.info("llm.request",
+                             detail={"status": response.status_code,
+                                     "elapsed_ms": round(elapsed_ms),
+                                     "prompt_tokens": prompt_tokens,
+                                     "completion_tokens": completion_tokens,
+                                     "total_tokens": usage.get("total_tokens", 0)})
+
+            return data
+
         except httpx.HTTPStatusError:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            # ★ 记录 HTTP 错误
+            self.tracer.error("llm.request",
+                              detail={"status": response.status_code,
+                                      "elapsed_ms": round(elapsed_ms),
+                                      "error": response.text[:200]})
             logger.error(
                 "HTTP %d from %s: %s",
                 response.status_code,
@@ -161,7 +229,13 @@ class LLMClient:
                 response.text[:500],
             )
             raise
+
         except httpx.RequestError:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            # ★ 记录网络错误
+            self.tracer.error("llm.request",
+                              detail={"elapsed_ms": round(elapsed_ms),
+                                      "error": "network_error"})
             logger.exception("Request failed (%s)", url)
             raise
 
@@ -207,6 +281,8 @@ class LLMClient:
         """Extract the text content from a chat-completion response.
 
         Returns an empty string if the response structure is unexpected.
+
+        这是 LLMClient 上最频繁调用的方法之一。
         """
         try:
             return response["choices"][0]["message"]["content"] or ""
@@ -234,6 +310,7 @@ class LLMClient:
     def close(self) -> None:
         """Close the underlying HTTP client."""
         self._client.close()
+        self.tracer.debug("llm.client_closed")
 
     def __enter__(self) -> "LLMClient":
         return self

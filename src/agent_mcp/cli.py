@@ -17,6 +17,9 @@ import click
 
 from agent_mcp.config_loader import load_config
 from agent_mcp.orchestrator import Orchestrator
+from agent_mcp.tracing import get_tracer  # ★ 日志追踪
+
+tracer = get_tracer()  # CLI 级别的全局追踪器
 
 # ---------------------------------------------------------------------------
 # 常量：项目根目录发现（向上查找 config.yaml）
@@ -173,10 +176,12 @@ def cmd_init() -> None:
     创建以下内容：
         .agent/              工作目录
         .agent/runs/         运行记录目录
+        .agent/logs/         日志目录（★ 新增）
         config.yaml          默认配置文件（如不存在）
         business-docs/       业务文档目录
         business-docs/README.md
     """
+    tracer.info("cli.init.start")  # ★ 日志：命令开始
     root = PROJECT_ROOT
     created: list[str] = []
     skipped: list[str] = []
@@ -196,6 +201,14 @@ def cmd_init() -> None:
         created.append(".agent/runs/")
     else:
         skipped.append(".agent/runs/（已存在）")
+
+    # --- .agent/logs/ 目录（★ 新增：日志存储） ---
+    logs_dir = agent_dir / "logs"
+    if not logs_dir.exists():
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        created.append(".agent/logs/")
+    else:
+        skipped.append(".agent/logs/（已存在）")
 
     # --- config.yaml ---
     config_path = root / "config.yaml"
@@ -252,6 +265,7 @@ def cmd_warmup() -> None:
 
     预热结果持久化到 .agent/ 目录，供后续 agent run 使用。
     """
+    tracer.info("cli.warmup.start")  # ★ 日志
     click.echo()
     click.secho("🔥 开始知识库预热...", fg="cyan", bold=True)
 
@@ -296,6 +310,7 @@ def cmd_run(task_file: str) -> None:
     流程阶段：
         需求理解 → 澄清问答 → 方案规划 → 代码实现 → 变更检查 → 提交推送 → 创建 MR
     """
+    tracer.info("cli.run.start", detail={"task_file": task_file})  # ★ 日志
     task_path = Path(task_file).resolve()
     click.echo()
     click.secho(f"📄 读取需求文件：{task_path}", fg="cyan")
@@ -347,6 +362,7 @@ def cmd_resume(run_id: str) -> None:
     示例：
         agent resume 20260510-001
     """
+    tracer.info("cli.resume.start", detail={"run_id": run_id})  # ★ 日志
     state_file = PROJECT_ROOT / ".agent" / "runs" / run_id / "state.json"
 
     click.echo()

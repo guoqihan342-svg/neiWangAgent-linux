@@ -3,18 +3,34 @@ Git MCP Server v0.1 — 版本控制操作
 
 职责：branch/commit/push（仅 agent/* 分支）
 安全约束：禁止操作 master/main/release/hotfix
+★ 日志追踪：每个 git 命令记录耗时和结果
 """
 
 import json
 import sys
 import subprocess
+import time
 from pathlib import Path
+
+from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
 
 
 class GitMCPServer:
+    """
+    Git MCP Server — 通过 stdio JSON-RPC 提供版本控制功能。
+
+    安全约束（方案 v4 §8.3）：
+      - 仅允许操作 agent/ 开头的分支
+      - 禁止操作 master/main/release/hotfix
+      - 禁止 force push
+
+    日志追踪：
+      每个工具调用自动记录命令、参数、耗时和结果。
+    """
     PROTECTED = ["master", "main", "release/", "hotfix/"]
 
     def __init__(self):
+        self.tracer: Tracer = get_tracer()  # ★ 日志追踪器
         self.tools = {
             "git_status": {
                 "description": "查看工作区状态",
@@ -79,6 +95,7 @@ class GitMCPServer:
         return {"error": f"Unknown method: {method}"}
 
     def _call_tool(self, name: str, args: dict):
+        """调用具体工具，带日志追踪。"""
         handler = {
             "git_status": self._status,
             "git_diff": self._diff,
@@ -90,13 +107,19 @@ class GitMCPServer:
 
         if handler:
             try:
+                start = time.perf_counter()  # ★ 计时
+                self.tracer.debug(f"git.{name}.start", detail=args)  # ★ 日志
                 result = handler(**args)
+                elapsed = time.perf_counter() - start
+                self.tracer.info(f"git.{name}", duration=elapsed, ok=True, detail=args)  # ★ 日志
                 return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
             except Exception as e:
+                self.tracer.error(f"git.{name}", detail=str(e))  # ★ 错误日志
                 return {"content": [{"type": "text", "text": f"Error: {e}"}], "isError": True}
         return {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}
 
     def _run(self, cmd: list[str], cwd: str = ".") -> tuple[int, str, str]:
+        """执行 shell 命令。"""
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
 
