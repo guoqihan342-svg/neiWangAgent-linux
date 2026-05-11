@@ -1,5 +1,5 @@
 """
-neiWangAgent — 本地无服务器 MCP Agent v0.1.6
+neiWangAgent — 本地无服务器 MCP Agent v0.1.7
 
 自动改代码 → commit → push → 创建 MR。
 

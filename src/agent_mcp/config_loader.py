@@ -538,17 +538,29 @@ class RetrievalWeights(BaseModel):
 
 
 class SecurityConfig(BaseModel):
-    """``security:`` section — 安全边界配置。"""
+    """★ 安全配置 — P4-21 扩展黑名单。"""
 
     allowed_paths: list[str] = Field(
         default_factory=lambda: [".", "./business-docs", "./.agent"]
     )
     deny_paths: list[str] = Field(
+        default_factory=lambda: ["~/.ssh", "~/.git-credentials", ".env", "*.pem", "*.key",
+                                  "/etc/passwd", "/etc/shadow", "~/.aws", "~/.config/gcloud"]
+    )
+    blocked_commands: list[str] = Field(
         default_factory=lambda: [
-            "~/.ssh", "~/.git-credentials", ".env", "*.pem", "*.key",
-            "*.p12", "*.jks", "*.keystore", "id_rsa*",
+            "sudo", "rm -rf /", "kubectl", "docker rm", "docker system prune",
+            "chmod 777", "chown -R", "kill -9 -1",
+            "> /dev/sda", "mkfs.", "dd if=", ":(){ :|:& };:",
+            "wget -O /tmp", "curl -o /tmp",
         ]
     )
+    # ★ P4-21: 路径遍历深度限制
+    max_path_depth: int = Field(default=10, ge=1, description="最大路径深度")
+    deny_path_prefixes: list[str] = Field(
+        default_factory=lambda: ["/etc", "/root", "/var/log", "/proc", "/sys", "/dev"]
+    )
+    allow_outbound_network: bool = True
     deny_path_globs: list[str] = Field(
         default_factory=lambda: [
             "**/.ssh/**", "**/credentials", "**/*.pem", "**/*.key",

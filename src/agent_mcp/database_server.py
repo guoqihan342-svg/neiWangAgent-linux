@@ -1,21 +1,23 @@
 """
-Database MCP Server v0.1.5 — 只读文档索引 + DDL 解析
+Database MCP Server v0.1.7 — 只读文档索引 + DDL 解析 + 只读连接验证
 
-★ P2-14: DDL 解析做实 — 提取表名/列名/类型/主键/索引，持久化到文件
+★ P2-14: DDL 解析做实
+★ P4-20: PostgreSQL 只读连接验证（metadata_only, READ ONLY transaction）
 
 v0.1: 不连接数据库，只做 DDL/MyBatis 文档索引
-v0.2: 预留只读连接验证
-安全红线: 永远不执行 INSERT/UPDATE/DELETE
+v0.2: 只读连接验证
+安全红线: 永远不执行 INSERT/UPDATE/DELETE/DROP/TRUNCATE
 
 持久化结构:
   .agent/knowledge/database/
-    tables.jsonl   — 表定义（name, columns, primary_key, indexes, comment）
-    columns.jsonl  — 列定义（table, name, type, nullable, default, comment）
-    indexes.jsonl  — 索引定义（table, name, columns, unique）
+    tables.jsonl   — 表定义
+    columns.jsonl  — 列定义
+    indexes.jsonl  — 索引定义
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -25,10 +27,10 @@ from agent_mcp.tracing import get_tracer, Tracer
 
 
 class DatabaseMCPServer(BaseMCPServer):
-    """Database MCP Server — DDL 解析 + 只读索引。"""
+    """Database MCP Server — DDL 解析 + 只读连接验证。"""
 
     name = "database-mcp"
-    version = "0.1.5"
+    version = "0.1.7"
 
     def __init__(self):
         super().__init__()
@@ -36,8 +38,10 @@ class DatabaseMCPServer(BaseMCPServer):
         self.blocked_sql_patterns = [
             r"\bDROP\s+TABLE", r"\bTRUNCATE",
             r"\bDELETE\s+FROM", r"\bINSERT\s+INTO", r"\bUPDATE\b",
+            r"\bALTER\s+TABLE", r"\bCREATE\s+TABLE", r"\bGRANT\b",
         ]
         self.write_enabled = False
+        self._readonly_config = self._load_readonly_config()
         self.tools = {
             "database_index_ddl": {
                 "description": "索引 DDL 文件，解析表/列/索引结构",
@@ -76,6 +80,176 @@ class DatabaseMCPServer(BaseMCPServer):
                     "properties": {"description": {"type": "string"}},
                 },
             },
+            # ★ P4-20: 只读连接验证
+            "database_verify_schema": {
+                "description": "连接数据库验证表结构（只读, metadata_only）",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "tables": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "要验证的表名列表（空=所有已索引表）"},
+                    },
+                },
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # ★ P4-20: 只读连接配置
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_readonly_config() -> dict:
+        """从环境变量加载只读连接配置。"""
+        return {
+            "enabled": os.environ.get("DB_READONLY_ENABLED", "").lower() == "true",
+            "host": os.environ.get("DB_HOST", "localhost"),
+            "port": int(os.environ.get("DB_PORT", "5432")),
+            "dbname": os.environ.get("DB_NAME", ""),
+            "user": os.environ.get("DB_USER", ""),
+            "password": os.environ.get("DB_PASSWORD", ""),
+            "statement_timeout_ms": int(os.environ.get("DB_STATEMENT_TIMEOUT_MS", "5000")),
+            "max_rows": int(os.environ.get("DB_MAX_ROWS", "100")),
+        }
+
+    def _verify_schema(self, tables: list[str] | None = None) -> dict:
+        """
+        ★ P4-20: 连接 PostgreSQL 验证表结构（只读模式）。
+
+        安全措施：
+          - SET TRANSACTION READ ONLY
+          - statement_timeout 限制
+          - 仅查询 information_schema（元数据）
+          - 不查询任何用户表数据
+          - 对比 DDL 索引报告差异
+        """
+        cfg = self._readonly_config
+        if not cfg["enabled"]:
+            return {
+                "verified": False,
+                "message": "只读连接未启用（设置 DB_READONLY_ENABLED=true 开启）",
+            }
+
+        try:
+            import importlib
+            psycopg2_spec = importlib.util.find_spec("psycopg2")
+            if psycopg2_spec is None:
+                return {"verified": False, "error": "psycopg2 未安装（pip install psycopg2-binary）"}
+
+            import psycopg2
+            import psycopg2.extras
+
+            conn = psycopg2.connect(
+                host=cfg["host"],
+                port=cfg["port"],
+                dbname=cfg["dbname"],
+                user=cfg["user"],
+                password=cfg["password"],
+                connect_timeout=5,
+            )
+            conn.set_session(readonly=True, autocommit=True)
+
+            cur = conn.cursor()
+            cur.execute(f"SET statement_timeout = '{cfg['statement_timeout_ms']}'")
+
+            # ── 查询 information_schema.columns ──
+            if tables:
+                placeholders = ",".join(["%s"] * len(tables))
+                cur.execute(
+                    f"""SELECT table_name, column_name, data_type, is_nullable, column_default
+                       FROM information_schema.columns
+                       WHERE table_schema = 'public'
+                       AND table_name IN ({placeholders})
+                       ORDER BY table_name, ordinal_position
+                       LIMIT %s""",
+                    [*tables, cfg["max_rows"] * len(tables)]
+                )
+            else:
+                cur.execute(
+                    """SELECT table_name, column_name, data_type, is_nullable, column_default
+                       FROM information_schema.columns
+                       WHERE table_schema = 'public'
+                       ORDER BY table_name, ordinal_position
+                       LIMIT %s""",
+                    [cfg["max_rows"] * 50]
+                )
+
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+
+            # ── 组织结果 ──
+            db_schema: dict[str, list[dict]] = {}
+            for row in rows:
+                tbl, col, dtype, nullable, default = row
+                db_schema.setdefault(tbl, []).append({
+                    "column": col,
+                    "type": dtype,
+                    "nullable": nullable == "YES",
+                    "default": str(default) if default else None,
+                })
+
+            # ── 对比 DDL 索引 ──
+            comparison = self._compare_with_ddl_index(db_schema, tables or [])
+
+            return {
+                "verified": True,
+                "tables_found": list(db_schema.keys()),
+                "table_count": len(db_schema),
+                "total_columns": sum(len(c) for c in db_schema.values()),
+                "comparison_with_ddl": comparison,
+                "mode": "metadata_only (READ ONLY transaction)",
+            }
+
+        except Exception as e:
+            self.tracer.error("database.verify_schema", detail=str(e))
+            return {"verified": False, "error": str(e)}
+
+    def _compare_with_ddl_index(
+        self, db_schema: dict[str, list[dict]], requested_tables: list[str]
+    ) -> dict:
+        """★ P4-20: 对比数据库实际 schema 与 DDL 索引。"""
+        db_dir = self._db_dir()
+        columns_path = db_dir / "columns.jsonl"
+        if not columns_path.exists():
+            return {"ddl_index_available": False, "note": "先运行 database_index_ddl"}
+
+        # 加载 DDL 索引
+        ddl_columns: dict[str, list[dict]] = {}
+        for line in columns_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                c = json.loads(line)
+                ddl_columns.setdefault(c["table"], []).append(c)
+            except json.JSONDecodeError:
+                continue
+
+        diffs: list[dict] = []
+        all_tables = set(db_schema.keys()) | set(ddl_columns.keys())
+
+        for tbl in sorted(all_tables):
+            db_cols = {c["column"]: c for c in db_schema.get(tbl, [])}
+            ddl_cols = {c["name"]: c for c in ddl_columns.get(tbl, [])}
+
+            missing_in_db = set(ddl_cols.keys()) - set(db_cols.keys())
+            extra_in_db = set(db_cols.keys()) - set(ddl_cols.keys())
+
+            if missing_in_db or extra_in_db:
+                diffs.append({
+                    "table": tbl,
+                    "missing_in_db": list(missing_in_db),
+                    "extra_in_db": list(extra_in_db),
+                    "status": "MISMATCH",
+                })
+
+        return {
+            "ddl_index_available": True,
+            "tables_compared": len(all_tables),
+            "mismatches": diffs,
+            "mismatch_count": len(diffs),
         }
 
     def _call_tool(self, name: str, args: dict):
@@ -84,6 +258,7 @@ class DatabaseMCPServer(BaseMCPServer):
             "database_search_schema": self._search_schema,
             "database_detect_risk": self._detect_risk,
             "database_generate_migration_draft": self._generate_draft,
+            "database_verify_schema": self._verify_schema,
         }.get(name)
         if handler:
             try:

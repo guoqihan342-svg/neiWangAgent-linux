@@ -668,46 +668,47 @@ class Orchestrator:
         """
         [120] 修改代码 — LLM 生成代码变更并写入文件。
 
-        流程：
-          1. 将需求和计划发送给 LLM（提示使用 @@FILE:path@@ ... @@END@@ 格式）
-          2. 用 code_parser 自动检测 LLM 输出格式（支持6种格式）
-          3. 安全边界检查，跳过 deny_paths
-          4. 写入文件，记录变更
+        ★ P4-22: 优先使用 @@PATCH 格式（仅变更部分），避免完整文件替换误删内容。
 
-        ★ 健壮性：
-          - LLM 输出任何支持的格式都能解析
-          - 所有格式失败时记录错误并降级
+        流程：
+          1. LLM 分析需求生成 unified diff patch（@@PATCH 格式）
+          2. code_parser 自动检测输出格式（PATCH > FILE > 代码块 > ...）
+          3. 安全边界检查
+          4. 写入文件
         """
         self.tracer.debug("state.implement.start", step="120")
         print("    ✏️ 生成代码修改...")
 
-        # ── 增强的 prompt：要求 LLM 使用标准格式 ──
+        # ★ P4-22: 优先要求 LLM 使用 @@PATCH unified diff 格式
         changes = self.llm.chat_with_system(
-            f"根据需求生成代码修改。对每个修改的文件，使用以下格式：\n"
+            f"为此需求生成代码修改。优先使用 unified diff patch 格式：\n"
+            f"  @@PATCH:相对路径@@\n"
+            f"  @@ -起始行,行数 +起始行,行数 @@\n"
+            f"   保留的上下文行\n"
+            f"  -删除的行\n"
+            f"  +新增的行\n"
+            f"  @@END@@\n\n"
+            f"如果是新文件，使用完整内容格式：\n"
             f"  @@FILE:相对路径@@\n"
-            f"  完整的新文件内容\n"
+            f"  完整文件内容\n"
             f"  @@END@@\n\n"
             f"需求:\n{self.run_state.requirement}"
         )
         content = self.llm.extract_content(changes)
 
-        # ── ★ 使用健壮解析器（自动检测6种格式） ──
         parsed = parse_code_changes(content)
 
         if not parsed.success:
-            # ── 所有格式都失败了 ──
             self.tracer.warning("state.implement.parse_failed", step="120",
-                                detail={"errors": parsed.errors,
-                                        "raw_len": len(content)})
+                                detail={"errors": parsed.errors, "raw_len": len(content)})
             print(f"    ⚠️ LLM输出格式无法解析 ({parsed.used_format})")
             print(f"    原始输出(前200字符): {content[:200]}")
-            return  # 不抛异常，允许后续状态继续（降级处理）
+            return
 
         # ── 写入文件 ──
         blocked: list[str] = []
         for cf in parsed.files:
             fpath = cf.path
-            # ★ 安全边界检查
             if self.config.is_path_denied(fpath):
                 blocked.append(fpath)
                 self.tracer.warning("state.implement.blocked", step="120",
