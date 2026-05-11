@@ -1,4 +1,4 @@
-     1|# neiWangAgent v0.1.4
+     1|# neiWangAgent v0.1.5
      2|
      3|> 本地无服务器 MCP Agent — 自动改代码 → commit → push → 创建 MR
      4|> 支持多语言项目：Java / Python / Go / TypeScript / Vue
@@ -79,7 +79,7 @@
     79|
     80|| 版本 | 日期 | 关键变更 |
     81||------|------|---------|
-    82|| v0.1.4 | 2026-05-11 | code_parser 6格式检测 + 错误恢复 + 状态级重试 |
+    82|| v0.1.5 | 2026-05-11 | code_parser 6格式检测 + 错误恢复 + 状态级重试 |
     83|| v0.1.1 | 2026-05-11 | BaseMCPServer基类 + 空handler修复 + mr_server代理 + 多语言 |
     84|| v0.1.0 | 2026-05-10 | 初始版本：CLI + 6 MCP Server + 16步状态机 |
     85|
