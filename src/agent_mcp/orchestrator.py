@@ -1,5 +1,5 @@
 """
-Orchestrator — 核心状态机编排器 v0.1（带日志追踪）
+Orchestrator — 核心状态机编排器 v0.1.3（带日志追踪）
 
 实现 Agent 从需求到 MR 的完整流程：
 INIT → WARMUP_CHECK → SUMMARY_REFRESH → WORKTREE_GUARD → LOAD_REQUIREMENT →
@@ -7,15 +7,10 @@ RETRIEVE_CONTEXT → UNDERSTAND_REQUIREMENT → CLARIFICATION_GATE →
 PLAN_IMPLEMENTATION → CREATE_BRANCH → IMPLEMENT → CHANGE_SCOPE_GUARD →
 DATABASE_IMPACT_DETECT → PREPARE_COMMIT → COMMIT → PUSH → CREATE_MR → DONE
 
-每个状态转换自动记录：
-  - 进入/退出时间戳
-  - 执行耗时（秒）
-  - 成功/失败状态
-  - 结构化详情（文件数、commit hash 等）
-
-日志双通道输出：
-  - 控制台：人类可读的简洁摘要
-  - 文件（.agent/logs/agent.log）：结构化 JSON Lines，可 grep/jq 分析
+★ v0.1.3 P0修复:
+  - 状态分级: CRITICAL(失败→FAILED) / OPTIONAL(失败→降级) / HUMAN(失败→PAUSED)
+  - resume: 不创建新run_id,直接驱动状态机
+  - 错误恢复: 关键状态不允许跳过
 """
 
 from __future__ import annotations
@@ -30,46 +25,68 @@ from typing import Any, Callable
 
 from agent_mcp.config_loader import AppConfig
 from agent_mcp.llm_client import LLMClient
-from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
-from agent_mcp.code_parser import parse_code_changes  # ★ 健壮代码解析
+from agent_mcp.tracing import get_tracer, Tracer
+from agent_mcp.code_parser import parse_code_changes
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 状态常量 — 对应方案 v4 §5.2 状态定义
+# 状态常量
 # =============================================================================
 
 class State:
-    """状态机状态码（三位数编码）"""
-    INIT = "000"                     # 启动
-    WARMUP_CHECK = "010"             # 检查知识库
-    SUMMARY_REFRESH = "015"          # 刷新第一层摘要（Summary 层）
-    WORKTREE_GUARD = "018"           # 工作区保护检查（v4 新增）
-    LOAD_REQUIREMENT = "020"         # 加载需求
-    RETRIEVE_CONTEXT = "030"         # 检索上下文
-    UNDERSTAND_REQUIREMENT = "040"   # 理解需求
-    CLARIFICATION_GATE = "050"       # 澄清判断闸门
-    ASK_HUMAN = "060"                # 生成澄清问题
-    WAITING_CLARIFICATION = "070"    # 等待人类回复
-    RESUME_WITH_ANSWER = "080"       # 恢复执行（带回答）
-    PLAN_IMPLEMENTATION = "100"      # 生成实施计划
-    CREATE_BRANCH = "110"            # 创建 Git 分支
-    IMPLEMENT = "120"                # 修改代码（LLM 驱动）
-    CHANGE_SCOPE_GUARD = "125"       # 变更范围护栏（v4 新增）
-    DATABASE_IMPACT_DETECT = "130"   # 数据库影响检测
-    GENERATE_DB_IMPACT_REPORT = "135"# 生成数据库影响报告
-    GENERATE_MIGRATION_DRAFT = "140" # 生成 migration 草稿
-    PREPARE_COMMIT = "150"           # 准备提交
-    COMMIT = "160"                   # 执行 git commit
-    PUSH = "170"                     # 推送代码
-    CREATE_MR = "180"                # 创建 Merge Request
-    DONE = "200"                     # 完成
+    INIT = "000"
+    WARMUP_CHECK = "010"
+    SUMMARY_REFRESH = "015"
+    WORKTREE_GUARD = "018"
+    LOAD_REQUIREMENT = "020"
+    RETRIEVE_CONTEXT = "030"
+    UNDERSTAND_REQUIREMENT = "040"
+    CLARIFICATION_GATE = "050"
+    ASK_HUMAN = "060"
+    WAITING_CLARIFICATION = "070"
+    RESUME_WITH_ANSWER = "080"
+    PLAN_IMPLEMENTATION = "100"
+    CREATE_BRANCH = "110"
+    IMPLEMENT = "120"
+    CHANGE_SCOPE_GUARD = "125"
+    DATABASE_IMPACT_DETECT = "130"
+    GENERATE_DB_IMPACT_REPORT = "135"
+    GENERATE_MIGRATION_DRAFT = "140"
+    PREPARE_COMMIT = "150"
+    COMMIT = "160"
+    PUSH = "170"
+    CREATE_MR = "180"
+    DONE = "200"
 
 
-# =============================================================================
-# 状态转换表 — 方案 v4 §5.1 状态图
-# =============================================================================
+# ★ P0-5: 状态分级
+# CRITICAL: 失败必须停止，不能跳过
+CRITICAL_STATES = {
+    State.CREATE_BRANCH,
+    State.IMPLEMENT,
+    State.CHANGE_SCOPE_GUARD,
+    State.PREPARE_COMMIT,
+    State.COMMIT,
+    State.PUSH,
+    State.CREATE_MR,
+}
+
+# OPTIONAL: 失败可降级跳过
+OPTIONAL_STATES = {
+    State.SUMMARY_REFRESH,
+    State.DATABASE_IMPACT_DETECT,
+    State.GENERATE_DB_IMPACT_REPORT,
+    State.GENERATE_MIGRATION_DRAFT,
+}
+
+# HUMAN: 失败后暂停等待人工
+HUMAN_STATES = {
+    State.CLARIFICATION_GATE,
+    State.ASK_HUMAN,
+}
+
 
 TRANSITIONS: dict[str, str | None] = {
     State.INIT: State.WARMUP_CHECK,
@@ -79,15 +96,15 @@ TRANSITIONS: dict[str, str | None] = {
     State.LOAD_REQUIREMENT: State.RETRIEVE_CONTEXT,
     State.RETRIEVE_CONTEXT: State.UNDERSTAND_REQUIREMENT,
     State.UNDERSTAND_REQUIREMENT: State.CLARIFICATION_GATE,
-    State.CLARIFICATION_GATE: State.PLAN_IMPLEMENTATION,      # 清晰 → 计划
-    State.ASK_HUMAN: State.WAITING_CLARIFICATION,             # 不清楚 → 暂停
-    State.WAITING_CLARIFICATION: None,                        # 终端：等待人工
-    State.RESUME_WITH_ANSWER: State.RETRIEVE_CONTEXT,         # 恢复 → 重新理解
+    State.CLARIFICATION_GATE: State.PLAN_IMPLEMENTATION,
+    State.ASK_HUMAN: State.WAITING_CLARIFICATION,
+    State.WAITING_CLARIFICATION: None,
+    State.RESUME_WITH_ANSWER: State.RETRIEVE_CONTEXT,
     State.PLAN_IMPLEMENTATION: State.CREATE_BRANCH,
     State.CREATE_BRANCH: State.IMPLEMENT,
     State.IMPLEMENT: State.CHANGE_SCOPE_GUARD,
     State.CHANGE_SCOPE_GUARD: State.DATABASE_IMPACT_DETECT,
-    State.DATABASE_IMPACT_DETECT: State.PREPARE_COMMIT,       # 不涉及DB → 提交
+    State.DATABASE_IMPACT_DETECT: State.PREPARE_COMMIT,
     State.GENERATE_DB_IMPACT_REPORT: State.PREPARE_COMMIT,
     State.GENERATE_MIGRATION_DRAFT: State.PREPARE_COMMIT,
     State.PREPARE_COMMIT: State.COMMIT,
@@ -96,10 +113,6 @@ TRANSITIONS: dict[str, str | None] = {
     State.CREATE_MR: State.DONE,
     State.DONE: None,
 }
-
-# =============================================================================
-# 状态中文名 — 用于日志和进度输出
-# =============================================================================
 
 STATE_NAMES: dict[str, str] = {
     State.INIT: "初始化",
@@ -128,28 +141,8 @@ STATE_NAMES: dict[str, str] = {
 }
 
 
-# =============================================================================
-# RunState — 运行持久化状态（方案 v4 §10.2）
-# =============================================================================
-
 class RunState:
-    """
-    一次 agent 运行的完整状态快照。
-
-    字段说明：
-        run_id:          运行唯一标识，格式 "YYYYMMDD-HHMMSS"
-        requirement:     原始需求文本
-        current_state:   当前状态码（三位数）
-        status:          运行状态："running" | "paused" | "completed" | "failed"
-        files_changed:   已修改的文件路径列表
-        lines_changed:   修改总行数（估算）
-        branch_name:     Git 分支名
-        commit_hash:     Git commit SHA
-        mr_url:          Merge Request URL
-        errors:          错误信息列表
-        transcript:      关键步骤记录列表
-        created_at:      创建时间 ISO8601
-    """
+    """一次运行的持久化状态"""
 
     def __init__(self, run_id: str, requirement: str = ""):
         self.run_id = run_id
@@ -166,25 +159,17 @@ class RunState:
         self.created_at = datetime.now().isoformat()
 
     def to_dict(self) -> dict:
-        """序列化为字典，用于持久化到 .agent/runs/{run_id}/state.json"""
         return {
-            "run_id": self.run_id,
-            "requirement": self.requirement,
-            "current_state": self.current_state,
-            "status": self.status,
-            "files_changed": self.files_changed,
-            "lines_changed": self.lines_changed,
-            "branch_name": self.branch_name,
-            "commit_hash": self.commit_hash,
-            "mr_url": self.mr_url,
-            "errors": self.errors,
-            "transcript": self.transcript,
-            "created_at": self.created_at,
+            "run_id": self.run_id, "requirement": self.requirement,
+            "current_state": self.current_state, "status": self.status,
+            "files_changed": self.files_changed, "lines_changed": self.lines_changed,
+            "branch_name": self.branch_name, "commit_hash": self.commit_hash,
+            "mr_url": self.mr_url, "errors": self.errors,
+            "transcript": self.transcript, "created_at": self.created_at,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "RunState":
-        """从字典反序列化，用于从 state.json 恢复运行"""
         rs = cls(data["run_id"], data.get("requirement", ""))
         rs.current_state = data.get("current_state", State.INIT)
         rs.status = data.get("status", "running")
@@ -199,42 +184,14 @@ class RunState:
         return rs
 
 
-# =============================================================================
-# Orchestrator — 核心编排器
-# =============================================================================
-
 class Orchestrator:
-    """
-    核心编排器 — 驱动状态机完成从需求到 MR 的全流程。
-
-    特性（v0.1）：
-      - LLM 作为主要决策引擎（理解需求、计划、生成代码）
-      - 真实 Git 操作（branch/commit/push）
-      - 结构化日志追踪（每个状态转换记录耗时和结果）
-      - 工作区保护（脏工作区阻止运行）
-      - 变更范围护栏（超限报警）
-
-    使用方式：
-        config = load_config()
-        orch = Orchestrator(config)
-        orch.run("在 README.md 添加 Features 章节")
-    """
+    """核心编排器"""
 
     def __init__(self, config: AppConfig):
-        """
-        初始化编排器。
-
-        参数：
-            config: AppConfig 实例，从 config.yaml 加载
-        """
         self.config = config
         self.llm = LLMClient(config)
         self.run_state: RunState | None = None
-
-        # ★ 初始化日志追踪器
         self.tracer: Tracer = get_tracer()
-
-        # ── 状态 → 处理器映射表 ──
         self._handlers: dict[str, Callable] = {
             State.INIT: self._handle_init,
             State.WARMUP_CHECK: self._handle_warmup_check,
@@ -258,94 +215,98 @@ class Orchestrator:
         }
 
     # ==================================================================
-    # 公开 API
+    # ★ P0-4: 分离 run / resume / _drive_state_machine
     # ==================================================================
 
     def run(self, requirement_text: str) -> dict:
-        """
-        从 INIT 到 DONE 的完整流程（★ 带错误恢复）。
-
-        参数：
-            requirement_text: 需求描述文本（Markdown/纯文本均可）
-
-        返回：
-            dict: 运行状态字典
-
-        ★ 错误恢复策略：
-          - 每个状态最多重试 max_retries 次（默认3次）
-          - 重试间隔指数退避（1s → 2s → 4s）
-          - 超过重试次数后降级：跳过当前状态，记录错误，继续下一状态
-          - CLARIFICATION_GATE 和 ASK_HUMAN 不重试（需要人工介入）
-        """
-        import time as _time
-
+        """创建新运行并驱动状态机。"""
         run_id = f"{date.today().strftime('%Y%m%d')}-{datetime.now().strftime('%H%M%S')}"
         self.run_state = RunState(run_id, requirement_text)
         self._ensure_run_dir()
-
         self.tracer.set_run_id(run_id)
         self.tracer.info("agent.run.start", step="000", detail=requirement_text[:200])
         print(f"\n🚀 Agent 运行 [{run_id}]")
         print(f"📋 {requirement_text[:100]}...\n")
+        return self._drive_state_machine()
+
+    def resume(self, run_id: str) -> dict:
+        """★ P0-4: 从保存的状态恢复，不创建新run_id。"""
+        state_path = Path(f".agent/runs/{run_id}/state.json")
+        if not state_path.exists():
+            raise FileNotFoundError(f"状态不存在: {state_path}")
+
+        data = json.loads(state_path.read_text())
+        self.run_state = RunState.from_dict(data)
+        self.tracer.set_run_id(run_id)  # ★ 复用旧run_id
+
+        if self.run_state.status == "completed":
+            self.tracer.info("agent.resume.already_done", detail=run_id)
+            print(f"✅ [{run_id}] 已完成")
+            return self.run_state.to_dict()
+
+        self.tracer.info("agent.resume", step=self.run_state.current_state,
+                          detail=f"从 {STATE_NAMES.get(self.run_state.current_state)} 恢复")
+        print(f"\n🔄 恢复 [{run_id}] @ {STATE_NAMES.get(self.run_state.current_state)}")
+        return self._drive_state_machine()
+
+    def _drive_state_machine(self) -> dict:
+        """
+        ★ P0-4: 核心状态机驱动逻辑（run 和 resume 共用）。
+
+        ★ P0-5 状态分级错误处理:
+          - CRITICAL 状态失败 → FAILED，停止（不允许跳过）
+          - OPTIONAL 状态失败 → 记录warning，降级跳过
+          - HUMAN 状态失败 → PAUSED，等待人工
+        """
+        import time as _time
 
         max_retries = getattr(self.config.runtime, 'max_retries', 3)
-        # 不需要重试的状态（需要人工介入或幂等操作）
         no_retry_states = {State.CLARIFICATION_GATE, State.ASK_HUMAN, State.DONE}
 
         try:
             while self.run_state.current_state != State.DONE:
                 state = self.run_state.current_state
                 name = STATE_NAMES.get(state, state)
-                step_code = state
-
                 self._save_state()
 
                 handler = self._handlers.get(state)
                 if handler:
-                    # ★ 带重试的状态执行
-                    success = False
-                    last_error = None
-                    retries = 0 if state in no_retry_states else max_retries
-
-                    for attempt in range(retries + 1):
-                        try:
-                            with self.tracer.span(f"state.{name}", step=step_code):
-                                result = handler()
-                                if result == "PAUSE":
-                                    self.run_state.status = "paused"
-                                    self._save_state()
-                                    self.tracer.info("agent.run.paused", step=step_code)
-                                    return self.run_state.to_dict()
-                            success = True
-                            break
-                        except Exception as e:
-                            last_error = e
-                            if attempt < retries:
-                                wait = 2 ** attempt  # 指数退避：1s, 2s, 4s
-                                self.tracer.warning(
-                                    f"state.{name}.retry",
-                                    step=step_code,
-                                    detail={"attempt": attempt + 1, "wait": wait, "error": str(e)[:200]}
-                                )
-                                print(f"    ⏳ 重试 {attempt + 1}/{retries} ({wait}s后)...")
-                                _time.sleep(wait)
-                            else:
-                                self.tracer.error(
-                                    f"state.{name}.failed",
-                                    step=step_code,
-                                    detail={"retries_exhausted": True, "error": str(e)[:200]}
-                                )
+                    success, last_error = self._execute_with_retry(
+                        handler, state, name, max_retries, no_retry_states, _time
+                    )
 
                     if not success and last_error:
-                        # ── ★ 降级处理：记录错误，跳过当前状态 ──
-                        self.run_state.errors.append(
-                            f"[{state}] {name}: {last_error}"
-                        )
-                        print(f"    ⚠️ [{state}] {name} 失败（已重试{retries}次），降级跳过")
-                        self.tracer.warning("agent.run.degraded", step=step_code,
-                                            detail=f"跳过 {name}: {last_error}")
+                        if state in CRITICAL_STATES:
+                            # ★ 关键状态失败 → 直接FAILED，禁止跳过
+                            self.run_state.errors.append(
+                                f"[CRITICAL] [{state}] {name}: {last_error}"
+                            )
+                            self.run_state.status = "failed"
+                            self._save_state()
+                            self.tracer.error(
+                                "agent.run.critical_failed", step=state,
+                                detail=f"关键状态 {name} 失败，停止: {last_error}"
+                            )
+                            print(f"\n❌ 关键状态 [{state}] {name} 失败，停止执行")
+                            return self.run_state.to_dict()
 
-                # ── 状态自动转换 ──
+                        elif state in OPTIONAL_STATES:
+                            # ★ 可选状态失败 → 降级跳过
+                            self.run_state.errors.append(
+                                f"[OPTIONAL] [{state}] {name}: {last_error}"
+                            )
+                            print(f"    ⚠️ [{state}] {name} 失败（可选），降级跳过")
+                            self.tracer.warning("agent.run.degraded", step=state,
+                                                detail=f"跳过 {name}: {last_error}")
+
+                        elif state in HUMAN_STATES:
+                            # ★ 人工状态失败 → PAUSED
+                            self.run_state.status = "paused"
+                            self._save_state()
+                            self.tracer.info("agent.run.paused_human", step=state)
+                            return self.run_state.to_dict()
+
+                # 状态自动转换
                 next_state = TRANSITIONS.get(state)
                 if next_state:
                     self.run_state.current_state = next_state
@@ -354,7 +315,6 @@ class Orchestrator:
                 elif state == State.WAITING_CLARIFICATION:
                     self.run_state.status = "paused"
                     self._save_state()
-                    self.tracer.info("agent.run.waiting_clarification", step=step_code)
                     return self.run_state.to_dict()
 
         except Exception as e:
@@ -368,45 +328,36 @@ class Orchestrator:
         self.run_state.status = "completed"
         self._save_state()
         self.tracer.info("agent.run.done", step="200", detail=self.run_state.mr_url)
-        print(f"\n✅ 完成 [{run_id}]")
+        print(f"\n✅ 完成 [{self.run_state.run_id}]")
         return self.run_state.to_dict()
 
-    def resume(self, run_id: str) -> dict:
-        """
-        从保存的状态文件恢复执行。
-
-        参数：
-            run_id: 运行 ID（.agent/runs/ 下的目录名）
-
-        返回：
-            dict: 运行状态字典
-
-        异常：
-            FileNotFoundError: 状态文件不存在时抛出
-        """
-        state_path = Path(f".agent/runs/{run_id}/state.json")
-        if not state_path.exists():
-            raise FileNotFoundError(f"状态不存在: {state_path}")
-
-        data = json.loads(state_path.read_text())
-        self.run_state = RunState.from_dict(data)
-
-        # ★ 恢复追踪上下文
-        self.tracer.set_run_id(run_id)
-        self.tracer.info("agent.resume", step=self.run_state.current_state,
-                          detail=f"从 {STATE_NAMES.get(self.run_state.current_state)} 恢复")
-
-        if self.run_state.status == "completed":
-            print(f"✅ [{run_id}] 已完成")
-            return self.run_state.to_dict()
-
-        print(f"\n🔄 恢复 [{run_id}] @ {STATE_NAMES.get(self.run_state.current_state)}")
-        return self.run(requirement_text=self.run_state.requirement)
-
-    # ==================================================================
-    # 状态处理器 — 每个状态一个方法
-    # ==================================================================
-
+    def _execute_with_retry(self, handler, state, name, max_retries, no_retry_states, _time) -> tuple[bool, any]:
+        """执行单个状态处理器，带重试。返回 (success, last_error)。"""
+        retries = 0 if state in no_retry_states else max_retries
+        for attempt in range(retries + 1):
+            try:
+                with self.tracer.span(f"state.{name}", step=state):
+                    result = handler()
+                    if result == "PAUSE":
+                        self.run_state.status = "paused"
+                        self._save_state()
+                        self.tracer.info("agent.run.paused", step=state)
+                return True, None
+            except Exception as e:
+                if attempt < retries:
+                    wait = 2 ** attempt
+                    self.tracer.warning(
+                        f"state.{name}.retry", step=state,
+                        detail={"attempt": attempt + 1, "wait": wait, "error": str(e)[:200]}
+                    )
+                    print(f"    ⏳ 重试 {attempt + 1}/{retries} ({wait}s后)...")
+                    _time.sleep(wait)
+                else:
+                    self.tracer.error(
+                        f"state.{name}.failed", step=state,
+                        detail={"retries_exhausted": True, "error": str(e)[:200]}
+                    )
+                    return False, e
     def _handle_init(self):
         """
         [000] 初始化 — 输出项目基本信息。

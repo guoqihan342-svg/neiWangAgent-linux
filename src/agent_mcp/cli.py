@@ -6,6 +6,8 @@ neiWangAgent CLI — 基于 Click 的命令行入口。
     agent warmup       构建知识库（Knowledge MCP 三层预热）
     agent run --task   完整流程：加载需求 → 状态机 → commit → push → MR
     agent resume       从 .agent/runs/{run_id}/state.json 恢复执行
+
+★ P0-2: 延迟 import config_loader / orchestrator，确保 init 命令在无 config.yaml 时也能执行。
 """
 
 from __future__ import annotations
@@ -15,11 +17,12 @@ from pathlib import Path
 
 import click
 
-from agent_mcp.config_loader import load_config
-from agent_mcp.orchestrator import Orchestrator
-from agent_mcp.tracing import get_tracer  # ★ 日志追踪
+# ★ 延迟 import — init 命令不依赖这些模块
+# from agent_mcp.config_loader import load_config
+# from agent_mcp.orchestrator import Orchestrator
+from agent_mcp.tracing import get_tracer  # tracing 无外部依赖，安全
 
-tracer = get_tracer()  # CLI 级别的全局追踪器
+tracer = get_tracer()
 
 # ---------------------------------------------------------------------------
 # 常量：项目根目录发现（向上查找 config.yaml）
@@ -159,7 +162,7 @@ DEFAULT_BUSINESS_README = """# business-docs
 # =============================================================================
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="neiWangAgent")
+@click.version_option(version="0.1.3", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
 def main() -> None:
     """neiWangAgent — 本地 MCP Agent，自动改代码 → commit → push → 创建 MR。"""
     pass
@@ -266,6 +269,8 @@ def cmd_warmup() -> None:
     预热结果持久化到 .agent/ 目录，供后续 agent run 使用。
     """
     tracer.info("cli.warmup.start")  # ★ 日志
+    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from agent_mcp.orchestrator import Orchestrator
     click.echo()
     click.secho("🔥 开始知识库预热...", fg="cyan", bold=True)
 
@@ -311,6 +316,8 @@ def cmd_run(task_file: str) -> None:
         需求理解 → 澄清问答 → 方案规划 → 代码实现 → 变更检查 → 提交推送 → 创建 MR
     """
     tracer.info("cli.run.start", detail={"task_file": task_file})  # ★ 日志
+    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from agent_mcp.orchestrator import Orchestrator
     task_path = Path(task_file).resolve()
     click.echo()
     click.secho(f"📄 读取需求文件：{task_path}", fg="cyan")
@@ -363,6 +370,8 @@ def cmd_resume(run_id: str) -> None:
         agent resume 20260510-001
     """
     tracer.info("cli.resume.start", detail={"run_id": run_id})  # ★ 日志
+    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from agent_mcp.orchestrator import Orchestrator
     state_file = PROJECT_ROOT / ".agent" / "runs" / run_id / "state.json"
 
     click.echo()

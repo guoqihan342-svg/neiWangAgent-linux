@@ -1,5 +1,5 @@
 """
-neiWangAgent — 本地无服务器 MCP Agent
+neiWangAgent — 本地无服务器 MCP Agent v0.1.3
 
 自动改代码 → commit → push → 创建 MR。
 
@@ -23,6 +23,7 @@ neiWangAgent — 本地无服务器 MCP Agent
 
 核心特性：
     - 16步状态机驱动（INIT → WARMUP → ... → DONE）
+    - 状态分级错误恢复（CRITICAL→STOP / OPTIONAL→降级 / HUMAN→暂停）
     - 真实 Git 操作（无 mock）
     - 结构化日志追踪（JSON Lines + 控制台双通道）
     - 工作区保护 + 变更护栏 + 安全边界
@@ -36,34 +37,24 @@ neiWangAgent — 本地无服务器 MCP Agent
     agent resume <run_id>      # 恢复执行
 """
 
-__version__ = "0.1.0"
+from agent_mcp._version import __version__  # ★ P0-3: 版本号单一来源
+
 __author__ = "neiWangAgent Team"
 
 # 公开 API
 from agent_mcp.config_loader import (
-    load_config,
-    ConfigLoader,
-    AppConfig,
-    ProjectType,
-    LANGUAGE_DEFAULTS,
+    load_config, ConfigLoader, AppConfig, ProjectType, LANGUAGE_DEFAULTS,
 )
 from agent_mcp.tracing import get_tracer, Tracer, trace_step
-from agent_mcp.orchestrator import Orchestrator, State, STATE_NAMES, RunState
+from agent_mcp.orchestrator import (
+    Orchestrator, State, STATE_NAMES, RunState,
+    CRITICAL_STATES, OPTIONAL_STATES, HUMAN_STATES,
+)
 
 __all__ = [
-    # Config
-    "load_config",
-    "ConfigLoader",
-    "AppConfig",
-    "ProjectType",
-    "LANGUAGE_DEFAULTS",
-    # Tracer
-    "get_tracer",
-    "Tracer",
-    "trace_step",
-    # Orchestrator
-    "Orchestrator",
-    "State",
-    "STATE_NAMES",
-    "RunState",
+    "__version__",
+    "load_config", "ConfigLoader", "AppConfig", "ProjectType", "LANGUAGE_DEFAULTS",
+    "get_tracer", "Tracer", "trace_step",
+    "Orchestrator", "State", "STATE_NAMES", "RunState",
+    "CRITICAL_STATES", "OPTIONAL_STATES", "HUMAN_STATES",
 ]
