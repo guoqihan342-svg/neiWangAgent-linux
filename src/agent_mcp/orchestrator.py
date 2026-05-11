@@ -608,6 +608,16 @@ class Orchestrator:
         prefix = self.config.git.branch_prefix  # 默认 "agent/"
         slug = date.today().strftime("%Y%m%d") + "-auto"
         branch = prefix + slug
+
+        # ★ 分支命名校验（方案 v4 §8.3）
+        import re as _re
+        naming = self.config.git.branch_naming
+        if not _re.match(naming.regex, branch):
+            raise RuntimeError(
+                f"分支名不符合规范: {branch}\n"
+                f"  要求匹配: {naming.regex}"
+            )
+
         self.run_state.branch_name = branch
 
         self.tracer.debug("state.create_branch.start", step="110",
@@ -655,17 +665,28 @@ class Orchestrator:
 
         # ── 解析 LLM 返回的文件块 ──
         file_blocks = re.split(r"@@FILE:(.+?)@@", content)
+        blocked: list[str] = []  # ★ 安全拦截记录
         for i in range(1, len(file_blocks), 2):
             if i + 1 < len(file_blocks):
                 fpath = file_blocks[i].strip()         # 文件路径
                 code = file_blocks[i + 1].strip()      # 文件内容
                 if fpath and code:
+                    # ★ 安全边界检查：拒绝修改禁止路径（方案 v4 §9.2）
+                    if self.config.is_path_denied(fpath):
+                        blocked.append(fpath)
+                        self.tracer.warning("state.implement.blocked", step="120",
+                                            detail={"path": fpath, "reason": "deny_paths"})
+                        continue  # 跳过禁止路径
+
                     pf = Path(fpath)
                     pf.parent.mkdir(parents=True, exist_ok=True)
                     pf.write_text(code, encoding="utf-8")
                     self.run_state.files_changed.append(fpath)
                     # ── 计算行数（估算） ──
                     self.run_state.lines_changed += len(code.splitlines())
+
+        if blocked:
+            print(f"    ⚠️ 已拦截 {len(blocked)} 个禁止文件: {', '.join(blocked)}")
 
         file_count = len(self.run_state.files_changed)
         self.tracer.info("state.implement", step="120",
@@ -680,27 +701,46 @@ class Orchestrator:
         检查项（方案 v4 §8.2）：
           - 文件数是否超过 max_files_changed（默认 20）
           - 行数是否超过 max_lines_changed（默认 800）
-          - 是否触碰到 deny_paths 中的受保护文件
+          - ★ 是否触碰到 deny_paths 中的受保护文件
 
-        v0.1 简化：仅检查文件数量。
-        v0.2 计划：完整实现 deny_paths 匹配和行数检查。
-
-        日志：记录文件数和是否超限
+        日志：记录文件数、行数、违规文件和是否超限
         """
+        from fnmatch import fnmatch
+
         policy = self.config.change_policy
         n = len(self.run_state.files_changed)
-        within_limit = n <= policy.max_files_changed
+        lines = self.run_state.lines_changed
+
+        violations: list[str] = []
+
+        # ── 检查文件数量 ──
+        if n > policy.max_files_changed:
+            violations.append(f"文件数 {n} > {policy.max_files_changed}")
+
+        # ── 检查行数 ──
+        if lines > int(policy.max_lines_changed):
+            violations.append(f"行数 {lines} > {policy.max_lines_changed}")
+
+        # ── ★ 检查 deny_paths（glob 匹配） ──
+        all_deny = policy.deny_paths + (policy.deny_path_globs or [])
+        for fpath in self.run_state.files_changed:
+            for pattern in all_deny:
+                if fnmatch(fpath, pattern) or fnmatch(Path(fpath).name, pattern):
+                    violations.append(f"禁止路径: {fpath} (匹配: {pattern})")
+                    break
+
+        within_limit = len(violations) == 0
 
         self.tracer.info("state.change_scope_guard", step="125",
-                         detail={"files": n, "limit": policy.max_files_changed,
-                                 "ok": within_limit})
+                         detail={"files": n, "lines": lines,
+                                 "violations": violations, "ok": within_limit})
 
         if within_limit:
-            print(f"    ✅ {n} 文件 (限制: {policy.max_files_changed})")
+            print(f"    ✅ {n} 文件, ~{lines} 行")
         else:
-            print(f"    ⚠️ {n} 文件超限 (限制: {policy.max_files_changed})")
+            print(f"    ⚠️ 违规: {'; '.join(violations)}")
             self.tracer.warning("state.change_scope_guard", step="125",
-                                detail="文件数超出限制")
+                                detail=f"超出变更范围: {'; '.join(violations)}")
 
     def _handle_database_impact_detect(self):
         """

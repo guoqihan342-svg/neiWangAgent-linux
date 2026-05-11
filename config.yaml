@@ -1,11 +1,13 @@
 # =============================================================================
-# neiWangAgent — Configuration
+# neiWangAgent — Configuration v0.1
+# 多语言支持：java | python | go | typescript | generic
 # =============================================================================
 
 project:
-  name: "neiWangAgent"
+  name: "neiWangAgent-linux"
   default_branch: "main"
   code_platform: "github"
+  project_type: "generic"        # java | python | go | typescript | generic
 
 runtime:
   mode: "local_mcp"
@@ -14,6 +16,8 @@ runtime:
   mcp_timeout_seconds: 30
   llm_base_url: "https://api.deepseek.com/v1"
   llm_model: "deepseek-v4-flash"
+  max_concurrent_mcp_calls: 5
+  max_retries: 3
 
 task:
   stop_after_create_mr: true
@@ -21,7 +25,9 @@ task:
   enable_self_review: false
   max_clarification_rounds: 3
   max_questions_per_round: 5
+  budget_cents: 20              # LLM 费用上限（分/次）
 
+# ===== MCP Servers（v0.1: 6 个）=====
 mcp:
   servers:
     knowledge:
@@ -43,6 +49,7 @@ mcp:
       command: "python"
       args: ["-m", "agent_mcp.clarification_server"]
 
+# ===== 三层预理解模型 =====
 knowledge:
   layers:
     summary:
@@ -56,39 +63,194 @@ knowledge:
       max_commits_to_scan: 100
       core_modules: []
       blame_key_files: []
+      key_commit_patterns: ["schema", "refactor", "API", "migrate"]
     deep:
       build_on_first_warmup: true
       rebuild_trigger: "manual"
   business_docs_dir: "./business-docs"
+  # 知识库失效规则
+  invalidation:
+    rebuild_summary_when: ["always_before_run"]
+    rebuild_hotspot_when:
+      - target_branch_changed
+      - files_changed_in_core_modules
+      - ddl_changed
+      - mapper_xml_changed
+      - pom_xml_changed
+      - package_json_changed
+    rebuild_deep_when:
+      - new_service_detected
+      - database_schema_changed
+      - route_structure_changed
+  # 支持的源文件扩展名（多语言）
+  source_extensions: [".java", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue"]
+  doc_extensions: [".md", ".txt", ".yaml", ".yml", ".json", ".sql"]
 
+# ===== Database（v0.1: 只读文档索引）=====
 database:
   enabled: false
+  db_type: "postgresql"
   mode: "local_docs_and_code_only"
+  orm: ["mybatis", "mybatis_plus"]
+  ddl_dir: "./business-docs/database/ddl"
+  data_dictionary_dir: "./business-docs/database/data-dictionary"
+  mapper_xml_paths: ["src/main/resources/mapper/**/*.xml"]
+  entity_paths: ["src/main/java/**/*Entity.java"]
   write_connection:
     enabled: false
     current_version_behavior: "never_execute_write_sql"
+  # v0.2 预留
+  readonly_verify:
+    enabled: false
+    default_mode: "metadata_only"
+    enforce_transaction_read_only: true
+    statement_timeout_ms: 5000
+    max_rows_limit: 100
+    allowed_schemas: ["public", "app"]
+    denied_tables: ["user_password", "auth_token", "session"]
+    denied_columns: ["password", "token", "secret", "id_card", "phone", "email"]
+  migration:
+    allow_generate_draft: true
+    allow_execute: false
+    require_dba_review: true
 
+# ===== Git 策略（含分支命名、commit模板、push策略）=====
 git:
   target_branch: "main"
+  diff_base_strategy: "merge_base"
   branch_prefix: "agent/"
   branch_naming:
     template: "agent/{yyyyMMdd}-{task_slug}"
+    regex: "^agent/[0-9]{8}-[a-z0-9][a-z0-9._-]{2,80}$"
+  commit_message:
+    template: "{type}: {summary}"
+    regex: "^(feat|fix|refactor|chore|docs|style|perf|revert)(\\([A-Za-z0-9._-]+\\))?: .{1,100}$"
+  push_policy:
+    allowed_branch_regex: "^agent/[A-Za-z0-9._/-]+$"
+    denied_branch_regex: "^(master|main|release/.*|hotfix/.*)$"
   worktree_policy:
     require_clean_before_run: true
     allow_untracked: false
+    on_dirty: "stop_and_ask"
   allow_commit: true
   allow_push: true
   allow_create_mr: true
   allow_merge: false
   allow_force_push: false
-  protected_branches: ["master", "main"]
+  protected_branches: ["master", "main", "release/*", "hotfix/*"]
 
+# ===== 变更范围护栏 =====
 change_policy:
   max_files_changed: 20
   max_lines_changed: 800
-  deny_paths: ["pom.xml", "package-lock.json", ".env", "*.pem", "*.key"]
+  deny_paths:
+    - "pom.xml"
+    - "package-lock.json"
+    - "yarn.lock"
+    - "pnpm-lock.yaml"
+    - "Dockerfile"
+    - "docker-compose*.yml"
+    - ".env"
+    - "*.pem"
+    - "*.key"
+  deny_path_globs: []
+  require_clarification_when:
+    dependency_file_changed: true
+    config_file_changed: true
+    auth_module_changed: true
+    permission_module_changed: true
+    database_schema_changed: true
+    more_than_max_files_changed: true
+    more_than_max_lines_changed: true
 
+# ===== MR 配置 =====
+mr:
+  provider: "github"
+  target_branch: "main"
+  title_template: "[Agent] {task_title}"
+  description_template: ".agent/templates/mr_description.md"
+  require_untested_marker: true
+
+# ===== 澄清配置 =====
+clarification:
+  enabled: true
+  default_mode: "manual_copy"
+  max_questions_per_round: 5
+  max_clarification_rounds: 3
+  ask_when:
+    requirement_conflict: true
+    missing_api_contract: true
+    business_rule_ambiguous: true
+    permission_or_status_flow_ambiguous: true
+    data_model_change_required: true
+    database_schema_unclear: true
+    enum_value_unclear: true
+    unclear_target_module: true
+    dependency_file_changed: true
+    exceeds_change_scope: true
+
+# ===== 检索权重（多语言）=====
+retrieval_weights:
+  current_code: 1.00
+  directly_referenced_files: 1.00
+  business_docs: 0.90
+  database_schema_docs: 0.90
+  database_entity_mapping: 0.88
+  # Java
+  java_controller: 0.85
+  java_service: 0.85
+  java_mapper: 0.85
+  java_entity: 0.85
+  # Vue
+  vue_route: 0.80
+  vue_api_client: 0.80
+  vue_component: 0.75
+  # Python
+  python_route: 0.85
+  python_service: 0.85
+  python_model: 0.85
+  # Go
+  go_handler: 0.85
+  go_model: 0.85
+  # TypeScript
+  ts_component: 0.80
+  ts_api_route: 0.85
+  # 通用
+  historical_mr_description: 0.65
+  code_comments: 0.55
+  commit_diff_history: 0.45
+  file_path_match: 0.45
+  freshness: 0.40
+  commit_message: 0.20
+
+# ===== 安全边界 =====
 security:
   allowed_paths: [".", "./business-docs", "./.agent"]
-  deny_paths: ["~/.ssh", "~/.git-credentials", ".env", "*.pem", "*.key"]
-  blocked_commands: ["sudo", "rm -rf /", "kubectl"]
+  deny_paths:
+    - "~/.ssh"
+    - "~/.git-credentials"
+    - ".env"
+    - "*.pem"
+    - "*.key"
+    - "*.p12"
+    - "*.jks"
+    - "*.keystore"
+    - "id_rsa*"
+  deny_path_globs:
+    - "**/.ssh/**"
+    - "**/credentials"
+    - "**/*.pem"
+    - "**/*.key"
+  blocked_commands:
+    - "sudo"
+    - "rm -rf /"
+    - "kubectl"
+    - "terraform apply"
+    - "shutdown"
+    - "reboot"
+  blocked_command_patterns:
+    - "rm\\s+-rf\\s+/"
+    - ">\\s*/dev/sda"
+  check_file_reads: true
+  check_file_writes: true
+  max_file_size_bytes: 10485760
