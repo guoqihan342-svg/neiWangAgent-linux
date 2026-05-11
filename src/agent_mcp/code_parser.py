@@ -411,3 +411,166 @@ def has_code_changes(llm_output: str) -> bool:
     """快速检查 LLM 输出是否包含代码变更。"""
     result = parse_code_changes(llm_output)
     return result.success
+
+
+# =============================================================================
+# ★ P5-25: Unified Diff 应用引擎
+# =============================================================================
+
+def apply_unified_diff(patch_text: str, file_path: str, dry_run: bool = False) -> dict:
+    """
+    将 unified diff patch 应用到实际文件。
+
+    这是从 LLM 生成的 @@PATCH 格式中提取 unified diff 并真正应用到文件的引擎。
+
+    参数：
+        patch_text: unified diff 文本（从 @@PATCH:path@@ ... @@END@@ 中提取的）
+        file_path:  目标文件路径
+        dry_run:    True 时只返回变更预览，不修改文件
+
+    返回：
+        dict: {applied: bool, hunks_applied: int, hunks_failed: int,
+               errors: [...], dry_run: bool, preview: str|None}
+
+    算法：
+        1. 读取原文件内容
+        2. 解析 unified diff hunks（@@ -old,count +new,count @@）
+        3. 逐 hunk 应用到原文件
+        4. 写回文件（非 dry_run）
+    """
+    import difflib
+    import tempfile
+
+    pf = Path(file_path)
+    if not pf.exists():
+        return {"applied": False, "error": f"文件不存在: {file_path}"}
+
+    try:
+        original_lines = pf.read_text(encoding="utf-8").splitlines(keepends=True)
+    except Exception as e:
+        return {"applied": False, "error": f"读取文件失败: {e}"}
+
+    # ── 解析 hunks ──
+    hunk_pattern = re.compile(
+        r"@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*?)(?=@@\s+-|\Z)",
+        re.DOTALL
+    )
+    hunks = hunk_pattern.findall(patch_text)
+
+    if not hunks:
+        # 尝试无 hunk header 的简单格式：只有 + 和 - 行
+        return _apply_simple_patch(patch_text, original_lines, pf, dry_run)
+
+    # ── 逐 hunk 应用 ──
+    result_lines = list(original_lines)
+    offset = 0  # 累计偏移量
+    applied = 0
+    failed = 0
+    errors: list[str] = []
+
+    for hunk in hunks:
+        old_start = int(hunk[0]) - 1  # 0-indexed
+        old_count = int(hunk[1]) if hunk[1] else 1
+        new_start = int(hunk[2]) - 1
+        new_count = int(hunk[3]) if hunk[3] else 1
+        hunk_body = hunk[4]
+
+        # 解析 hunk body
+        added_lines: list[str] = []
+        removed_count = 0
+        context_before = 0
+
+        for line in hunk_body.split("\n"):
+            line = line.rstrip("\r")
+            if not line:
+                continue
+            if line.startswith("+") and not line.startswith("+++"):
+                added_lines.append(line[1:] + "\n")
+            elif line.startswith("-") and not line.startswith("---"):
+                removed_count += 1
+            elif line.startswith(" "):
+                context_before += 1
+
+        # 计算在结果文件中的位置
+        pos = old_start + offset
+        if pos < 0 or pos > len(result_lines):
+            errors.append(f"Hunk 位置越界: old_start={old_start}, offset={offset}, len={len(result_lines)}")
+            failed += 1
+            continue
+
+        # 删除旧行
+        end_pos = min(pos + old_count, len(result_lines))
+        del result_lines[pos:end_pos]
+
+        # 插入新行
+        for line in added_lines:
+            result_lines.insert(pos, line)
+            pos += 1
+
+        offset += len(added_lines) - (end_pos - (old_start + offset))
+        applied += 1
+
+    if applied == 0:
+        return {"applied": False, "hunks_applied": 0, "hunks_failed": failed, "errors": errors}
+
+    if dry_run:
+        preview = "".join(result_lines)
+        return {
+            "applied": True, "dry_run": True,
+            "hunks_applied": applied, "hunks_failed": failed,
+            "errors": errors,
+            "preview": preview[:2000],
+            "total_lines": len(result_lines),
+        }
+
+    # ── 写回文件 ──
+    try:
+        pf.write_text("".join(result_lines), encoding="utf-8")
+    except Exception as e:
+        return {"applied": False, "error": f"写入文件失败: {e}"}
+
+    return {
+        "applied": True,
+        "hunks_applied": applied,
+        "hunks_failed": failed,
+        "errors": errors,
+        "total_lines": len(result_lines),
+    }
+
+
+def _apply_simple_patch(
+    patch_text: str, original_lines: list[str], file_path: Path, dry_run: bool
+) -> dict:
+    """
+    简单 patch 模式：仅有 +/- 行，无 hunk header。
+
+    用于 LLM 输出简化的 patch 格式（只有添加和删除行，没有上下文）。
+    """
+    additions: list[tuple[int, str]] = []
+    deletions: set[int] = set()
+    current_line = 0
+
+    for line in patch_text.split("\n"):
+        line = line.rstrip("\r")
+        if line.startswith("+") and not line.startswith("+++"):
+            additions.append((current_line, line[1:] + "\n"))
+            current_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions.add(current_line)
+        elif line.strip():
+            current_line += 1
+
+    result = []
+    for i, line in enumerate(original_lines):
+        if i not in deletions:
+            result.append(line)
+        # 在对应位置插入新增行
+        for add_pos, add_line in list(additions):
+            if add_pos == i:
+                result.append(add_line)
+
+    if dry_run:
+        return {"applied": True, "dry_run": True, "preview": "".join(result)[:2000]}
+
+    file_path.write_text("".join(result), encoding="utf-8")
+    return {"applied": True, "additions": len(additions), "deletions": len(deletions)}

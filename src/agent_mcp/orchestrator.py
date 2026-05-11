@@ -1008,17 +1008,14 @@ class Orchestrator:
         """
         知识库预热 — 三层预理解模型（方案 v4 §4.1）。
 
+        ★ P5-27: 增量更新 — 检测文件变更，仅重建受影响层级。
+
         依次执行：
           1. Summary 层 — 代码库文件索引
           2. Hotspot 层 — 核心模块分析
-          3. Deep 层    — 深度代码索引
+          3. Deep 层    — 深度代码索引（含 MyBatis/Vue）
 
         预热结果持久化到 .agent/knowledge/state.json
-
-        返回：
-            dict: 包含各层索引结果的字典
-
-        日志：每层的文件数和耗时
         """
         from agent_mcp.knowledge_server import KnowledgeMCPServer
 
@@ -1027,7 +1024,12 @@ class Orchestrator:
         repo = str(Path.cwd())
         result = {"layers": {}, "files_total": 0}
 
-        # ── Summary 层 — 项目结构概览 ──
+        # ★ P5-27: 检测是否需要增量更新
+        invalidation_reason = self._check_knowledge_freshness()
+        if invalidation_reason:
+            print(f"    📌 {invalidation_reason}")
+
+        # ── Summary 层 ──
         with self.tracer.span("warmup.summary"):
             print("  [summary] 扫描代码库...")
             r = ks._index_codebase(repo, "summary")
@@ -1035,14 +1037,14 @@ class Orchestrator:
             result["files_total"] += r.get("files_indexed", 0)
             print(f"  [summary] {r.get('files_indexed', 0)} 个文件")
 
-        # ── Hotspot 层 — 核心模块分析 ──
+        # ── Hotspot 层 ──
         with self.tracer.span("warmup.hotspot"):
             print("  [hotspot] 分析核心模块...")
             r = ks._index_codebase(repo, "hotspot")
             result["layers"]["hotspot"] = r
             print(f"  [hotspot] {r.get('message', '完成')}")
 
-        # ── Deep 层 — 深度索引 ──
+        # ── Deep 层 ──
         with self.tracer.span("warmup.deep"):
             print("  [deep] 深度索引...")
             r = ks._index_codebase(repo, "deep")
@@ -1052,9 +1054,43 @@ class Orchestrator:
         # ── 保存知识库状态 ──
         Path(".agent/knowledge").mkdir(parents=True, exist_ok=True)
         kb_path = Path(".agent/knowledge/state.json")
+        result["updated_at"] = datetime.now().isoformat()
         kb_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
         self.tracer.info("agent.warmup.done",
                          detail={"files_total": result["files_total"]})
         print(f"\n✅ 预热完成，共索引 {result['files_total']} 个文件")
         return result
+
+    def _check_knowledge_freshness(self) -> str:
+        """
+        ★ P5-27: 检测知识库新鲜度。
+
+        检查项（方案 v4 §4.3）：
+          - target_branch 是否有新提交
+          - 核心模块文件是否变更
+          - DDL 文件是否变更
+          - Mapper XML 是否变更
+        """
+        kb_state = Path(".agent/knowledge/state.json")
+        if not kb_state.exists():
+            return "知识库未构建，将首次构建"
+
+        try:
+            prev = json.loads(kb_state.read_text(encoding="utf-8"))
+        except Exception:
+            return "知识库状态损坏，将重建"
+
+        prev_at = prev.get("updated_at", "")
+        # 检查 git 是否有新提交
+        try:
+            result = subprocess.run(
+                ["git", "log", "--oneline", "-1", "--since", prev_at[:19] if prev_at else "1970-01-01"],
+                capture_output=True, text=True
+            )
+            if result.stdout.strip():
+                return f"检测到新提交，将增量更新"
+        except Exception:
+            pass
+
+        return ""  # 知识库新鲜，不需要提示

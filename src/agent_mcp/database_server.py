@@ -483,12 +483,130 @@ class DatabaseMCPServer(BaseMCPServer):
         }
 
     def _detect_risk(self, changed_files: list[str]) -> dict:
-        """检测代码变更对数据库的影响。"""
-        risky = []
+        """
+        ★ P5-26: 深度数据库影响检测 — 交叉分析变更文件与 DDL 索引。
+
+        检测策略：
+          1. 检查变更文件中的 Entity/Mapper/DAO/DDL/SQL 关键词
+          2. 对 Entity 文件：从 DDL 索引中查找对应表
+          3. 对 Mapper XML：从 DDL 索引中查找 resultType 对应的表
+          4. 对 DDL 文件：直接标记为高风险
+          5. 对 SQL 文件：提取表名并交叉验证
+        """
+        risky_files: list[dict] = []
+        affected_tables: set[str] = set()
+        high_risk_keywords = {"entity", "mapper", "dao", "model", "ddl", "sql", "repository"}
+        medium_risk_keywords = {"service", "controller", "handler"}
+
+        # ── 加载 DDL 索引 ──
+        ddl_tables = self._load_ddl_tables()
+
         for f in changed_files:
-            if any(kw in f.lower() for kw in ["entity", "mapper", "dao", "model", "ddl", "sql"]):
-                risky.append(f)
-        return {"affected": len(risky) > 0, "risky_files": risky, "message": "请 DBA Review"}
+            f_lower = f.lower()
+            risk_level = "none"
+            matched_tables: list[str] = []
+
+            # ── 高风险关键词检测 ──
+            if any(kw in f_lower for kw in high_risk_keywords):
+                risk_level = "high"
+                # 从 DDL 索引查找关联表
+                matched_tables = self._find_related_tables(f, ddl_tables)
+
+            elif any(kw in f_lower for kw in medium_risk_keywords):
+                risk_level = "medium"
+
+            if risk_level != "none":
+                risky_files.append({
+                    "file": f,
+                    "risk_level": risk_level,
+                    "affected_tables": matched_tables,
+                })
+                affected_tables.update(matched_tables)
+
+        # ── 生成影响报告 ──
+        tables_detail = []
+        for tbl in sorted(affected_tables):
+            if tbl in ddl_tables:
+                tables_detail.append({
+                    "table": tbl,
+                    "columns": ddl_tables[tbl].get("columns", []),
+                    "indexes": ddl_tables[tbl].get("indexes", []),
+                })
+
+        risk_summary = (
+            f"发现 {len(risky_files)} 个文件涉及数据库变更，"
+            f"影响 {len(affected_tables)} 个表"
+        ) if risky_files else "未检测到数据库影响"
+
+        return {
+            "affected": len(risky_files) > 0,
+            "risk_summary": risk_summary,
+            "risky_files": risky_files,
+            "affected_tables": sorted(affected_tables),
+            "tables_detail": tables_detail,
+            "high_risk_count": sum(1 for r in risky_files if r["risk_level"] == "high"),
+            "medium_risk_count": sum(1 for r in risky_files if r["risk_level"] == "medium"),
+            "message": "请 DBA Review 变更" if risky_files else "无数据库影响",
+        }
+
+    def _load_ddl_tables(self) -> dict[str, dict]:
+        """★ P5-26: 从持久化索引加载 DDL 表信息。"""
+        db_dir = self._db_dir()
+        tables_path = db_dir / "tables.jsonl"
+        if not tables_path.exists():
+            return {}
+        tables: dict[str, dict] = {}
+        for line in tables_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                t = json.loads(line)
+                tables[t["name"]] = t
+            except json.JSONDecodeError:
+                continue
+        return tables
+
+    def _find_related_tables(self, file_path: str, ddl_tables: dict[str, dict]) -> list[str]:
+        """
+        ★ P5-26: 从变更文件路径推断关联的数据库表。
+
+        规则：
+          - Entity/Model 文件 → 从类名推断表名（驼峰→下划线）
+          - Mapper XML → 解析 resultType/parameterType
+          - SQL/DDL 文件 → 提取 CREATE TABLE / ALTER TABLE 中的表名
+        """
+        related: list[str] = []
+        pf = Path(file_path)
+        name = pf.stem.lower()
+
+        # ── Java Entity 命名规则：UserEntity → user / User → user ──
+        import re
+        # 去掉 Entity/Model/PO 后缀
+        clean = re.sub(r"(entity|model|po|vo|dto)$", "", name, flags=re.IGNORECASE)
+        # 驼峰转下划线
+        snake = re.sub(r"([A-Z])", r"_\1", clean).lower().lstrip("_")
+
+        for tbl_name in ddl_tables:
+            if snake in tbl_name.lower() or tbl_name.lower() in snake:
+                related.append(tbl_name)
+
+        # ── Mapper XML 文件 → 解析内容 ──
+        if pf.suffix == ".xml" and "mapper" in name:
+            try:
+                content = pf.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                content = ""
+            # 提取 resultType 中的类名 → 映射到表
+            type_matches = re.findall(
+                r'(?:resultType|parameterType)="[^"]*\.(\w+)"', content
+            )
+            for type_name in type_matches:
+                for tbl_name in ddl_tables:
+                    if type_name.lower().replace("entity", "") in tbl_name.lower():
+                        related.append(tbl_name)
+
+        return list(set(related))
 
     def _generate_draft(self, description: str = "") -> dict:
         """生成 migration 草稿（不执行）。"""
