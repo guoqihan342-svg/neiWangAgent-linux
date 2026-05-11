@@ -162,7 +162,7 @@ DEFAULT_BUSINESS_README = """# business-docs
 # =============================================================================
 
 @click.group()
-@click.version_option(version="0.1.3", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
+@click.version_option(version="0.1.4", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
 def main() -> None:
     """neiWangAgent — 本地 MCP Agent，自动改代码 → commit → push → 创建 MR。"""
     pass

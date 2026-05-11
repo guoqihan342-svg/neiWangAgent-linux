@@ -1,5 +1,5 @@
 """
-Orchestrator — 核心状态机编排器 v0.1.3（带日志追踪）
+Orchestrator — 核心状态机编排器 v0.1.4（带日志追踪 + MCP 集成）
 
 实现 Agent 从需求到 MR 的完整流程：
 INIT → WARMUP_CHECK → SUMMARY_REFRESH → WORKTREE_GUARD → LOAD_REQUIREMENT →
@@ -7,6 +7,12 @@ RETRIEVE_CONTEXT → UNDERSTAND_REQUIREMENT → CLARIFICATION_GATE →
 PLAN_IMPLEMENTATION → CREATE_BRANCH → IMPLEMENT → CHANGE_SCOPE_GUARD →
 DATABASE_IMPACT_DETECT → PREPARE_COMMIT → COMMIT → PUSH → CREATE_MR → DONE
 
+★ v0.1.4 P1 MCP化:
+  - Orchestrator 通过 Git/MR/Knowledge MCP Server 执行操作
+  - MR Server Provider 模式 (github/internal_mcp/mock)
+  - Knowledge Server 持久化 + 搜索
+  - Code Parser 新增 @@PATCH 模式
+  - git_server 强制显式 files（禁止 git add -A）
 ★ v0.1.3 P0修复:
   - 状态分级: CRITICAL(失败→FAILED) / OPTIONAL(失败→降级) / HUMAN(失败→PAUSED)
   - resume: 不创建新run_id,直接驱动状态机
@@ -27,6 +33,10 @@ from agent_mcp.config_loader import AppConfig
 from agent_mcp.llm_client import LLMClient
 from agent_mcp.tracing import get_tracer, Tracer
 from agent_mcp.code_parser import parse_code_changes
+# ★ P1-6: MCP Server 集成 — Orchestrator 通过 MCP 接口操作 Git/MR/Knowledge
+from agent_mcp.git_server import GitMCPServer
+from agent_mcp.mr_server import MRMCPServer, get_mr_provider
+from agent_mcp.knowledge_server import KnowledgeMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +202,10 @@ class Orchestrator:
         self.llm = LLMClient(config)
         self.run_state: RunState | None = None
         self.tracer: Tracer = get_tracer()
+        # ★ P1-6: 实例化 MCP Server（直接模式，不走 stdio 子进程）
+        self._git_mcp = GitMCPServer()
+        self._mr_mcp = MRMCPServer()
+        self._knowledge_mcp = KnowledgeMCPServer()
         self._handlers: dict[str, Callable] = {
             State.INIT: self._handle_init,
             State.WARMUP_CHECK: self._handle_warmup_check,
@@ -213,6 +227,33 @@ class Orchestrator:
             State.CREATE_MR: self._handle_create_mr,
             State.DONE: self._handle_done,
         }
+
+    # ==================================================================
+    # ★ P1-6: MCP 工具调用辅助方法
+    # ==================================================================
+
+    @staticmethod
+    def _mcp_call(server, tool_name: str, **args) -> dict:
+        """
+        调用 MCP Server 的工具方法并解析响应。
+
+        参数：
+            server:     MCP Server 实例（如 GitMCPServer）
+            tool_name:  工具名称（如 "git_create_branch"）
+            **args:     工具参数
+
+        返回：
+            dict: 解析后的 JSON 结果
+
+        异常：
+            RuntimeError: 当 MCP 工具返回 isError=True 时
+        """
+        resp = server._call_tool(tool_name, args)
+        content_list = resp.get("content", [])
+        text = content_list[0]["text"] if content_list else "{}"
+        if resp.get("isError"):
+            raise RuntimeError(f"MCP 工具 [{tool_name}] 失败: {text}")
+        return json.loads(text)
 
     # ==================================================================
     # ★ P0-4: 分离 run / resume / _drive_state_machine
@@ -608,16 +649,9 @@ class Orchestrator:
 
     def _handle_create_branch(self):
         """
-        [110] 创建 Git 分支 — 以 agent/ 前缀创建新分支。
+        [110] 创建 Git 分支 — 通过 Git MCP Server。
 
-        流程：
-          1. 从 config 读取分支前缀和命名模板
-          2. 生成分支名（格式：agent/YYYYMMDD-auto）
-          3. 执行 git checkout -b <branch>
-
-        安全约束：
-          - 分支名必须以 agent/ 开头（方案 v4 §8.3）
-          - 禁止操作 master/main/release/hotfix
+        ★ P1-6: 使用 git_create_branch MCP 工具（替代直接 subprocess）。
 
         日志：记录分支名和创建结果
         """
@@ -625,7 +659,7 @@ class Orchestrator:
         slug = date.today().strftime("%Y%m%d") + "-auto"
         branch = prefix + slug
 
-        # ★ 分支命名校验（方案 v4 §8.3）
+        # ★ 分支命名校验
         naming = self.config.git.branch_naming
         if not re.match(naming.regex, branch):
             raise RuntimeError(
@@ -634,22 +668,15 @@ class Orchestrator:
             )
 
         self.run_state.branch_name = branch
-
         self.tracer.debug("state.create_branch.start", step="110",
                           detail={"branch": branch})
 
-        # ── 执行 git checkout -b ──
-        result = subprocess.run(
-            ["git", "checkout", "-b", branch],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            self.tracer.error("state.create_branch", step="110",
-                              detail={"branch": branch, "error": result.stderr.strip()})
-            raise RuntimeError(f"创建分支失败: {result.stderr.strip()}")
+        # ★ 通过 Git MCP Server 创建分支
+        result = self._mcp_call(self._git_mcp, "git_create_branch",
+                                branch_name=branch)
 
         self.tracer.info("state.create_branch", step="110",
-                         detail={"branch": branch})
+                         detail={"branch": branch, "result": result})
         print(f"    🌿 分支已创建: {branch}")
 
     def _handle_implement(self):
@@ -799,16 +826,10 @@ class Orchestrator:
 
     def _handle_commit(self):
         """
-        [160] 执行 Git Commit — 暂存并提交所有变更。
+        [160] 执行 Git Commit — 通过 Git MCP Server。
 
-        流程：
-          1. 检查是否有文件需要提交
-          2. git add -- <files> 暂存变更文件
-          3. git commit -m <message> 提交
-          4. 提取 commit SHA 用于日志追踪
-
-        Commit Message 格式（方案 v4 §8.4）：
-          feat: <需求摘要前 80 字符>
+        ★ P1-6: 使用 git_commit MCP 工具（替代直接 subprocess）。
+        ★ P1-10 联动: files 参数必须显式传入。
 
         日志：记录 commit SHA、文件列表和消息
         """
@@ -819,34 +840,13 @@ class Orchestrator:
         self.tracer.debug("state.commit.start", step="160",
                           detail={"files": files})
 
-        # ── 暂存文件 ──
-        add_result = subprocess.run(
-            ["git", "add", "--"] + files,
-            capture_output=True, text=True
-        )
-        if add_result.returncode != 0:
-            self.tracer.error("state.commit.add_failed", step="160",
-                              detail=add_result.stderr.strip())
-            raise RuntimeError(f"git add 失败: {add_result.stderr.strip()}")
-
         # ── 生成 Commit Message ──
         msg = f"feat: {self.run_state.requirement[:80]}"
 
-        # ── 执行 Commit ──
-        commit_result = subprocess.run(
-            ["git", "commit", "-m", msg],
-            capture_output=True, text=True
-        )
-        if commit_result.returncode != 0:
-            self.tracer.error("state.commit.failed", step="160",
-                              detail=commit_result.stderr.strip())
-            raise RuntimeError(f"git commit 失败: {commit_result.stderr.strip()}")
-
-        # ── 提取 Commit SHA ──
-        # git commit 输出格式：[branch <sha>] message
-        output = (commit_result.stdout + commit_result.stderr).strip()
-        match = re.search(r"\[[^\]]+\s+([a-f0-9]+)", output)
-        self.run_state.commit_hash = match.group(1) if match else "unknown"
+        # ★ 通过 Git MCP Server 提交（显式传入 files）
+        result = self._mcp_call(self._git_mcp, "git_commit",
+                                message=msg, files=files)
+        self.run_state.commit_hash = result.get("sha", "unknown")
 
         self.tracer.info("state.commit", step="160",
                          detail={"sha": self.run_state.commit_hash,
@@ -856,97 +856,86 @@ class Orchestrator:
 
     def _handle_push(self):
         """
-        [170] 推送代码 — git push origin <branch>。
+        [170] 推送代码 — 通过 Git MCP Server。
 
-        安全约束（方案 v4 §8.3）：
-          - 仅允许推送 agent/ 开头的分支
-          - 禁止推送 master/main/release/hotfix
-          - 禁止 force push
+        ★ P1-6: 使用 git_push MCP 工具（替代直接 subprocess）。
 
         日志：记录推送的分支名和结果
         """
         branch = self.run_state.branch_name
-
-        # ── 安全校验：分支名必须以 agent/ 开头 ──
-        if not branch.startswith("agent/"):
-            self.tracer.error("state.push.blocked", step="170",
-                              detail=f"禁止推送非 agent/ 分支: {branch}")
-            raise RuntimeError(
-                f"分支名 {branch} 不以 agent/ 开头，禁止推送"
-            )
-
         self.tracer.debug("state.push.start", step="170",
                           detail={"branch": branch})
 
-        # ── 执行 git push ──
-        result = subprocess.run(
-            ["git", "push", "origin", branch],
-            capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            self.tracer.error("state.push.failed", step="170",
-                              detail=result.stderr.strip())
-            raise RuntimeError(f"git push 失败: {result.stderr.strip()}")
+        # ★ 通过 Git MCP Server 推送（安全校验在 server 端完成）
+        result = self._mcp_call(self._git_mcp, "git_push", branch=branch)
 
         self.tracer.info("state.push", step="170",
-                         detail={"branch": branch})
+                         detail={"branch": branch, "result": result})
         print(f"    🚀 已推送 {branch} → origin")
 
     def _handle_create_mr(self):
         """
-        [180] 创建 Merge Request — 生成 MR 描述并输出链接。
+        [180] 创建 Merge Request — 通过 MR MCP Server。
 
-        流程：
-          1. 获取 git remote URL
-          2. 解析 GitHub URL，构造 PR 链接
-          3. 生成 MR 描述文件（Markdown）
-          4. 写入 .agent/runs/{run_id}/mr_description.md
-
-        MR 描述模板（方案 v4 §12.1）：
-          包含变更文件清单、需求摘要、Review 检查项
+        ★ P1-6: 使用 mr_create MCP 工具（替代直接构造 GitHub URL）。
 
         日志：记录 MR URL 和描述文件路径
         """
         self.tracer.debug("state.create_mr.start", step="180")
 
-        # ── 获取远端 URL 并构造 MR 链接 ──
-        mr_url = ""
-        try:
-            remote_result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, check=True
-            )
-            remote_url = remote_result.stdout.strip()
+        # ── 解析 repo 名称（owner/repo） ──
+        repo = self._resolve_repo_name()
 
-            # ── 解析 GitHub URL ──
-            # 支持格式：
-            #   git@github.com:owner/repo.git
-            #   https://github.com/owner/repo.git
-            if "github.com" in remote_url:
-                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
-                if m:
-                    repo_path = m.group(1)
-                    mr_url = (
-                        f"https://github.com/{repo_path}/pull/new/"
-                        f"{self.run_state.branch_name}"
-                    )
-                else:
-                    mr_url = f"MR: {remote_url} (分支: {self.run_state.branch_name})"
-            else:
-                mr_url = f"MR: {remote_url} (分支: {self.run_state.branch_name})"
-        except subprocess.CalledProcessError:
-            mr_url = f"MR 链接不可用，分支: {self.run_state.branch_name}"
+        # ── 生成 MR 描述 ──
+        mr_desc = self._gen_mr_desc()
+        title = f"[Agent] {self.run_state.requirement[:72]}"
+
+        # ★ 通过 MR MCP Server 创建 MR
+        try:
+            result = self._mcp_call(
+                self._mr_mcp, "mr_create",
+                title=title,
+                description=mr_desc,
+                source_branch=self.run_state.branch_name,
+                repo=repo,
+            )
+            mr_url = result.get("url", "")
+        except Exception as e:
+            # 降级：如果 MCP 失败，生成手动 MR 描述文件
+            self.tracer.warning("state.create_mr.mcp_failed", step="180",
+                                detail=str(e))
+            mr_url = f"MR 创建失败 ({e})，见 mr_description.md"
 
         self.run_state.mr_url = mr_url
 
-        # ── 生成并写入 MR 描述 ──
-        mr_desc = self._gen_mr_desc()
+        # ── 写入 MR 描述文件 ──
         dp = Path(f".agent/runs/{self.run_state.run_id}/mr_description.md")
         dp.write_text(mr_desc, encoding="utf-8")
 
         self.tracer.info("state.create_mr", step="180",
                          detail={"url": mr_url, "desc_file": str(dp)})
         print(f"    📬 {mr_url}")
+
+    def _resolve_repo_name(self) -> str:
+        """
+        ★ P1-6: 解析 GitHub repo 名（owner/repo）。
+
+        从 git remote origin URL 提取 owner/repo。
+        支持 git@github.com:owner/repo.git 和 https://github.com/owner/repo.git 格式。
+        """
+        try:
+            remote_result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, check=True
+            )
+            remote_url = remote_result.stdout.strip()
+            if "github.com" in remote_url:
+                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+                if m:
+                    return m.group(1)
+            return "unknown/unknown"
+        except subprocess.CalledProcessError:
+            return "unknown/unknown"
 
     def _handle_done(self):
         """

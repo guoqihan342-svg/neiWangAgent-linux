@@ -138,17 +138,28 @@ class GitMCPServer(BaseMCPServer):
         return {"branch": branch_name, "created": True}
 
     def _commit(self, message: str, files: list | None = None) -> dict:
-        if files:
-            self._run(["git", "add"] + files)
-        else:
-            self._run(["git", "add", "-A"])
+        # ★ P1-10: 必须显式传入 files，禁止默认 git add -A（防止误提交临时文件/日志/生成物）
+        if not files:
+            raise ValueError("必须显式传入 files 参数，禁止默认 git add -A")
+        self._run(["git", "add", "--"] + files)
         rc, out, err = self._run(["git", "commit", "-m", message])
         if rc != 0:
             raise RuntimeError(f"提交失败: {err}")
-        return {"message": message, "committed": True}
+        # 提取 commit SHA
+        import re
+        m = re.search(r"\[[^\]]+\s+([a-f0-9]+)", out + err)
+        sha = m.group(1) if m else "unknown"
+        return {"message": message, "committed": True, "sha": sha, "files": files}
 
-    def _push(self, branch: str) -> dict:
+    def _push(self, branch: str, force: bool = False) -> dict:
         self._check_protected(branch)
+        # ★ P1-10: 禁止 force push
+        if force:
+            raise ValueError("禁止 force push（安全策略）")
+        # ★ P1-10: 分支名校验（仅允许 agent/ 开头）
+        import re as _re
+        if not _re.match(r"^agent/[A-Za-z0-9._/-]+$", branch):
+            raise ValueError(f"分支名不符合推送策略: {branch}（必须以 agent/ 开头）")
         rc, out, err = self._run(["git", "push", "origin", branch])
         if rc != 0:
             raise RuntimeError(f"推送失败: {err}")

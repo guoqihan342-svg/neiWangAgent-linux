@@ -280,7 +280,82 @@ class KnowledgeMCPServer(BaseMCPServer):
         result["language_distribution"] = lang_dist
         result["layer"] = layer
 
+        # ★ P1-8: 持久化知识库到 .agent/knowledge/
+        self._persist_knowledge(result, files, rp, layer)
+
         return result
+
+    # ------------------------------------------------------------------
+    # ★ P1-8: 持久化
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _kb_dir() -> Path:
+        """获取知识库持久化目录。"""
+        kb = Path(".agent/knowledge")
+        kb.mkdir(parents=True, exist_ok=True)
+        return kb
+
+    def _persist_knowledge(self, result: dict, files: list[Path],
+                           root: Path, layer: str):
+        """
+        ★ P1-8: 将索引结果持久化到磁盘。
+
+        持久化结构：
+          .agent/knowledge/summary.json    — Summary 层结果
+          .agent/knowledge/hotspot.json    — Hotspot 层结果
+          .agent/knowledge/deep_index.jsonl — Deep 层索引（每行一个文件）
+          .agent/knowledge/files_index.jsonl — 所有文件元数据索引
+        """
+        kb = self._kb_dir()
+
+        # ── 保存层级结果 ──
+        layer_file = kb / f"{layer}.json"
+        layer_file.write_text(
+            json.dumps(result, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8"
+        )
+
+        # ── 构建并覆盖 files_index.jsonl — 所有文件的元数据 ──
+        files_idx = kb / "files_index.jsonl"
+        lines: list[str] = []
+        for f in files:
+            try:
+                rel = str(f.relative_to(root))
+            except ValueError:
+                rel = str(f)
+            try:
+                content = f.read_text(encoding="utf-8", errors="ignore")
+                line_count = len(content.splitlines())
+            except Exception:
+                content = ""
+                line_count = 0
+            entry = {
+                "path": rel,
+                "abs_path": str(f),
+                "language": self._classify_file(f),
+                "mtime": f.stat().st_mtime,
+                "size": f.stat().st_size,
+                "lines": line_count,
+            }
+            lines.append(json.dumps(entry, ensure_ascii=False))
+
+        files_idx.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _load_files_index(self) -> list[dict]:
+        """★ P1-8: 加载文件索引。"""
+        idx_path = self._kb_dir() / "files_index.jsonl"
+        if not idx_path.exists():
+            return []
+        entries: list[dict] = []
+        for line in idx_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return entries
 
     def _build_summary(
         self, files: list[Path], lang_dist: dict, root: Path
@@ -446,16 +521,88 @@ class KnowledgeMCPServer(BaseMCPServer):
         file_types: list[str] | None = None,
     ) -> dict:
         """
-        搜索知识库（简化版，基于文件名和路径匹配）。
+        ★ P1-8: 搜索知识库 — 从持久化索引中检索。
 
-        v0.1 简化：不做全文搜索。
-        v0.2 计划：全文索引 + 语义搜索。
+        支持：
+          - 按文件名搜索（query 匹配文件名）
+          - 按路径搜索（query 匹配文件路径）
+          - 按关键词 grep 搜索（在已索引文件中 grep）
+          - 按语言过滤（file_types）
+          - 按最近修改时间排序
+
+        返回：
+            dict: {query, file_types, matches: [{path, language, mtime, lines, matched_line?}]}
         """
+        entries = self._load_files_index()
+        if not entries:
+            return {
+                "query": query,
+                "file_types": file_types,
+                "matches": [],
+                "total_files": 0,
+                "message": "知识库未索引，请先运行 agent warmup",
+            }
+
+        query_lower = query.lower()
+        matches: list[dict] = []
+
+        for entry in entries:
+            # ── 语言过滤 ──
+            if file_types and entry["language"] not in file_types:
+                continue
+
+            path_lower = entry["path"].lower()
+            name = Path(entry["path"]).name.lower()
+
+            # ── 文件名匹配 ──
+            name_match = query_lower in name
+
+            # ── 路径匹配 ──
+            path_match = query_lower in path_lower
+
+            # ── 关键词 grep（在文件内容中搜索） ──
+            content_match = None
+            if not name_match and not path_match and query_lower:
+                try:
+                    content = Path(entry["abs_path"]).read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
+                    lines = content.splitlines()
+                    for i, line in enumerate(lines, 1):
+                        if query_lower in line.lower():
+                            content_match = {
+                                "line_number": i,
+                                "line_text": line[:200],
+                            }
+                            break
+                except Exception:
+                    pass
+
+            if name_match or path_match or content_match:
+                match = {
+                    "path": entry["path"],
+                    "language": entry["language"],
+                    "mtime": entry["mtime"],
+                    "lines": entry["lines"],
+                    "match_type": (
+                        "filename" if name_match else
+                        "path" if path_match else
+                        "content"
+                    ),
+                }
+                if content_match:
+                    match["matched_line"] = content_match
+                matches.append(match)
+
+        # ── 按最近修改时间排序 ──
+        matches.sort(key=lambda m: -m["mtime"])
+
         return {
             "query": query,
             "file_types": file_types,
-            "message": f"搜索功能 v0.1: query={query}, file_types={file_types}",
-            "note": "全文搜索将在 v0.2 实现",
+            "matches": matches[:50],  # 最多返回 50 个
+            "total_files": len(entries),
+            "total_matches": len(matches),
         }
 
     def _stats(self) -> dict:

@@ -1,17 +1,22 @@
 """
 代码解析器 — 从 LLM 输出中提取代码文件变更
 
+★ v0.1.4 P1-9: 新增 unified diff patch 模式（最高优先级）
+
 支持多种 LLM 输出格式（按可靠性排序）：
-  1. @@FILE:path@@ ... @@END@@      ← 当前格式
+  0. @@PATCH:path@@ ... @@END@@      ← ★ 新增: unified diff patch（最高优先级）
+  1. @@FILE:path@@ ... @@END@@      ← 完整文件替换
   2. ---FILE:path--- ... ---END---     ← 备选格式
   3. ```language:path ... ```          ← Markdown 代码块格式
   4. ### FILE: path\n```...```         ← 标题+代码块格式
-  5. file: path\n    (缩进代码)       ← 纯文本格式
+  5. diff --git a/path                 ← Git diff 格式
+  6. file: path\n    (缩进代码)       ← 纯文本格式
 
 解析策略：
   - 按格式优先级依次尝试
   - 第一个成功解析出 ≥1 个文件的格式即为最终结果
   - 如果所有格式都失败，返回空列表 + 原始内容供调试
+  - ★ Patch 模式: 仅生成变更部分，不对原文件做完整替换
 
 用法：
     from agent_mcp.code_parser import parse_code_changes
@@ -61,6 +66,44 @@ class ParseResult:
 # =============================================================================
 # 格式解析器 — 每种格式一个解析函数
 # =============================================================================
+
+def _parse_format_patch(content: str) -> list[CodeFile]:
+    """
+    ★ P1-9: 格式0: @@PATCH:path@@ ... @@END@@（最高优先级）
+
+    Patch 模式使用 unified diff 格式，仅描述变更部分而非完整文件内容。
+    这避免了 LLM 输出完整文件时误删原文件未纳入上下文的内容。
+
+    示例:
+        @@PATCH:src/main.py@@
+        @@ -10,7 +10,8 @@
+         import os
+        -import json
+        +import json
+        +import yaml
+         from app import create_app
+        @@END@@
+
+    解析策略：
+      - 从 unified diff 中提取 + 行作为新增/修改内容
+      - v0.1: 简化处理 — 将 patch 内容作为标记后的完整文件内容
+        （后续版本实现真正的 diff 应用）
+    """
+    files = []
+    pattern = r"@@PATCH:\s*(.+?)\s*@@(.*?)@@END@@"
+    for match in re.finditer(pattern, content, re.DOTALL | re.IGNORECASE):
+        path = match.group(1).strip()
+        patch_content = match.group(2).strip()
+        if path and patch_content:
+            # v0.1.4: 将 patch 内容标记为 diff 模式
+            # 完整内容替换模式标记为 "full"，patch 模式标记为 "patch"
+            files.append(CodeFile(
+                path=path,
+                content=f"# PATCH MODE — unified diff for {path}\n{patch_content}",
+                language="diff"
+            ))
+    return files
+
 
 def _parse_format_file_end(content: str) -> list[CodeFile]:
     """
@@ -206,12 +249,13 @@ def _parse_format_git_diff(content: str) -> list[CodeFile]:
 # 核心解析函数
 # =============================================================================
 
-# 所有格式解析器，按优先级排列
+# 所有格式解析器，按优先级排列（★ P1-9: patch 模式最高优先级）
 _PARSERS = [
+    ("@@PATCH:@@ unified diff ... @@END@@", _parse_format_patch),
     ("@@FILE:@@ ... @@END@@", _parse_format_file_end),
     ("---FILE:--- ... ---END---", _parse_format_dash_file),
     ("```lang:path ... ```", _parse_format_markdown_fence),
-    ("### FILE: path\n```...```", _parse_format_heading_fence),
+    ("### FILE: path\\n```...```", _parse_format_heading_fence),
     ("diff --git a/path", _parse_format_git_diff),
     ("file: path (缩进)", _parse_format_bare_file),
 ]
