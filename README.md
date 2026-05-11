@@ -73,7 +73,7 @@ neiWangAgent resume 20260511-123456  # 恢复中断（自动加载澄清答案�
 
 | 版本 | 日期 | 关键变更 |
 |------|------|---------|
-| **v0.2.0** | 2026-05-11 | P7运维闭环: Run report/Budget控制/MR增强/Knowledge自动重建 + 安全审查:移除所有硬编码外网URL |
+| **v0.2.0** | 2026-05-11 | P7运维闭环: Run report/Budget控制/MR增强/Knowledge自动重建 + 安全审查:移除所有硬编码外网URL + **P8代码优化: 去方法级import、硬编码URL清零** |
 | v0.1.9 | 2026-05-11 | P6 Agent化: Self-review提交前自审 + Resume答案自动加载 + Dry-run模式 |
 | v0.1.8 | 2026-05-11 | P5 填补stub: apply_unified_diff引擎 + DB影响交叉分析 + Knowledge失效检测 |
 | v0.1.7 | 2026-05-11 | P4 安全验证: DB只读连接(PostgreSQL metadata_only) + 安全黑名单扩展(16项) |
