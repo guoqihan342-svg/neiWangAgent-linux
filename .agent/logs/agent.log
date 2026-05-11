@@ -100,3 +100,105 @@
 {"ts": "2026-05-11T04:30:26.281911+00:00", "level": "DEBUG", "event": "agent.shutdown", "run_id": "20260511-123011"}
 {"ts": "2026-05-11T04:30:26.283534+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "run_id": "20260511-123011", "detail": {"proxy": "http://127.0.0.1:7890"}}
 {"ts": "2026-05-11T04:30:26.292341+00:00", "level": "DEBUG", "event": "llm.client_init", "run_id": "20260511-123011", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:41:59.303620+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:41:59.348111+00:00", "level": "DEBUG", "event": "llm.client_init", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:41:59.348842+00:00", "level": "DEBUG", "event": "llm.client_closed"}
+{"ts": "2026-05-11T04:41:59.349224+00:00", "level": "DEBUG", "event": "agent.shutdown"}
+{"ts": "2026-05-11T04:41:59.351027+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:41:59.359943+00:00", "level": "DEBUG", "event": "llm.client_init", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:41:59.360346+00:00", "level": "DEBUG", "event": "llm.client_closed"}
+{"ts": "2026-05-11T04:41:59.360691+00:00", "level": "DEBUG", "event": "agent.shutdown"}
+{"ts": "2026-05-11T04:41:59.366257+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:41:59.375054+00:00", "level": "DEBUG", "event": "llm.client_init", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:41:59.376331+00:00", "level": "INFO", "event": "agent.run.start", "run_id": "20260511-124159", "step": "000", "detail": "add test feature"}
+{"ts": "2026-05-11T04:41:59.379205+00:00", "level": "DEBUG", "event": "state.初始化.start", "run_id": "20260511-124159", "step": "000"}
+{"ts": "2026-05-11T04:41:59.379833+00:00", "level": "DEBUG", "event": "state.init", "run_id": "20260511-124159", "step": "000", "detail": {"project": "test", "model": "${LLM_MODEL}"}}
+{"ts": "2026-05-11T04:41:59.380250+00:00", "level": "INFO", "event": "state.初始化", "run_id": "20260511-124159", "step": "000", "duration": 0.001, "ok": true}
+{"ts": "2026-05-11T04:41:59.384353+00:00", "level": "DEBUG", "event": "state.检查知识库.start", "run_id": "20260511-124159", "step": "010"}
+{"ts": "2026-05-11T04:41:59.385020+00:00", "level": "DEBUG", "event": "state.warmup_check", "run_id": "20260511-124159", "step": "010", "detail": {"path": ".agent/knowledge", "exists": true}}
+{"ts": "2026-05-11T04:41:59.385411+00:00", "level": "INFO", "event": "state.检查知识库", "run_id": "20260511-124159", "step": "010", "duration": 0.001, "ok": true}
+{"ts": "2026-05-11T04:41:59.388325+00:00", "level": "DEBUG", "event": "state.刷新摘要.start", "run_id": "20260511-124159", "step": "015"}
+{"ts": "2026-05-11T04:41:59.388701+00:00", "level": "DEBUG", "event": "state.summary_refresh", "run_id": "20260511-124159", "step": "015", "detail": "2026-05-11T12:41:59.388450"}
+{"ts": "2026-05-11T04:41:59.389091+00:00", "level": "INFO", "event": "state.刷新摘要", "run_id": "20260511-124159", "step": "015", "duration": 0.001, "ok": true}
+{"ts": "2026-05-11T04:41:59.392263+00:00", "level": "DEBUG", "event": "state.工作区保护检查.start", "run_id": "20260511-124159", "step": "018"}
+{"ts": "2026-05-11T04:41:59.392770+00:00", "level": "DEBUG", "event": "git.git_status.start", "run_id": "20260511-124159", "detail": {}}
+{"ts": "2026-05-11T04:41:59.476415+00:00", "level": "INFO", "event": "git.git_status", "run_id": "20260511-124159", "duration": 0.084, "ok": true, "detail": {}}
+{"ts": "2026-05-11T04:41:59.476861+00:00", "level": "WARNING", "event": "state.worktree_guard", "run_id": "20260511-124159", "step": "018", "detail": {"status": "dirty", "count": 5, "files": ["M .agent/logs/agent.log", " M src/agent_mcp/__init__.py", " M src/agent_mcp/cli.py", " M src/agent_mcp/config_loader.py", " M src/agent_mcp/llm_client.py"]}}
+{"ts": "2026-05-11T04:41:59.477266+00:00", "level": "ERROR", "event": "state.工作区保护检查.error", "run_id": "20260511-124159", "step": "018", "detail": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}
+{"ts": "2026-05-11T04:41:59.477648+00:00", "level": "INFO", "event": "state.工作区保护检查", "run_id": "20260511-124159", "step": "018", "duration": 0.085, "ok": false}
+{"ts": "2026-05-11T04:41:59.478070+00:00", "level": "WARNING", "event": "state.工作区保护检查.retry", "run_id": "20260511-124159", "step": "018", "detail": {"attempt": 1, "wait": 1, "error": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}}
+{"ts": "2026-05-11T04:42:00.480826+00:00", "level": "DEBUG", "event": "state.工作区保护检查.start", "run_id": "20260511-124159", "step": "018"}
+{"ts": "2026-05-11T04:42:00.482030+00:00", "level": "DEBUG", "event": "git.git_status.start", "run_id": "20260511-124159", "detail": {}}
+{"ts": "2026-05-11T04:42:00.568167+00:00", "level": "INFO", "event": "git.git_status", "run_id": "20260511-124159", "duration": 0.087, "ok": true, "detail": {}}
+{"ts": "2026-05-11T04:42:00.568668+00:00", "level": "WARNING", "event": "state.worktree_guard", "run_id": "20260511-124159", "step": "018", "detail": {"status": "dirty", "count": 5, "files": ["M .agent/logs/agent.log", " M src/agent_mcp/__init__.py", " M src/agent_mcp/cli.py", " M src/agent_mcp/config_loader.py", " M src/agent_mcp/llm_client.py"]}}
+{"ts": "2026-05-11T04:42:00.569102+00:00", "level": "ERROR", "event": "state.工作区保护检查.error", "run_id": "20260511-124159", "step": "018", "detail": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}
+{"ts": "2026-05-11T04:42:00.569495+00:00", "level": "INFO", "event": "state.工作区保护检查", "run_id": "20260511-124159", "step": "018", "duration": 0.091, "ok": false}
+{"ts": "2026-05-11T04:42:00.569883+00:00", "level": "WARNING", "event": "state.工作区保护检查.retry", "run_id": "20260511-124159", "step": "018", "detail": {"attempt": 2, "wait": 2, "error": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}}
+{"ts": "2026-05-11T04:42:02.572700+00:00", "level": "DEBUG", "event": "state.工作区保护检查.start", "run_id": "20260511-124159", "step": "018"}
+{"ts": "2026-05-11T04:42:02.574000+00:00", "level": "DEBUG", "event": "git.git_status.start", "run_id": "20260511-124159", "detail": {}}
+{"ts": "2026-05-11T04:42:02.660922+00:00", "level": "INFO", "event": "git.git_status", "run_id": "20260511-124159", "duration": 0.087, "ok": true, "detail": {}}
+{"ts": "2026-05-11T04:42:02.661424+00:00", "level": "WARNING", "event": "state.worktree_guard", "run_id": "20260511-124159", "step": "018", "detail": {"status": "dirty", "count": 5, "files": ["M .agent/logs/agent.log", " M src/agent_mcp/__init__.py", " M src/agent_mcp/cli.py", " M src/agent_mcp/config_loader.py", " M src/agent_mcp/llm_client.py"]}}
+{"ts": "2026-05-11T04:42:02.661944+00:00", "level": "ERROR", "event": "state.工作区保护检查.error", "run_id": "20260511-124159", "step": "018", "detail": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}
+{"ts": "2026-05-11T04:42:02.662384+00:00", "level": "INFO", "event": "state.工作区保护检查", "run_id": "20260511-124159", "step": "018", "duration": 0.092, "ok": false}
+{"ts": "2026-05-11T04:42:02.662793+00:00", "level": "WARNING", "event": "state.工作区保护检查.retry", "run_id": "20260511-124159", "step": "018", "detail": {"attempt": 3, "wait": 4, "error": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}}
+{"ts": "2026-05-11T04:42:06.665048+00:00", "level": "DEBUG", "event": "state.工作区保护检查.start", "run_id": "20260511-124159", "step": "018"}
+{"ts": "2026-05-11T04:42:06.667342+00:00", "level": "DEBUG", "event": "git.git_status.start", "run_id": "20260511-124159", "detail": {}}
+{"ts": "2026-05-11T04:42:06.741719+00:00", "level": "INFO", "event": "git.git_status", "run_id": "20260511-124159", "duration": 0.076, "ok": true, "detail": {}}
+{"ts": "2026-05-11T04:42:06.742171+00:00", "level": "WARNING", "event": "state.worktree_guard", "run_id": "20260511-124159", "step": "018", "detail": {"status": "dirty", "count": 5, "files": ["M .agent/logs/agent.log", " M src/agent_mcp/__init__.py", " M src/agent_mcp/cli.py", " M src/agent_mcp/config_loader.py", " M src/agent_mcp/llm_client.py"]}}
+{"ts": "2026-05-11T04:42:06.742579+00:00", "level": "ERROR", "event": "state.工作区保护检查.error", "run_id": "20260511-124159", "step": "018", "detail": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}
+{"ts": "2026-05-11T04:42:06.743019+00:00", "level": "INFO", "event": "state.工作区保护检查", "run_id": "20260511-124159", "step": "018", "duration": 0.079, "ok": false}
+{"ts": "2026-05-11T04:42:06.743387+00:00", "level": "ERROR", "event": "state.工作区保护检查.failed", "run_id": "20260511-124159", "step": "018", "detail": {"retries_exhausted": true, "error": "工作区不干净，有 5 个未提交修改:\n  M .agent/logs/agent.log\n   M src/agent_mcp/__init__.py\n   M src/agent_mcp/cli.py\n   M src/agent_mcp/config_loader.py\n   M src/agent_mcp/llm_client.py"}}
+{"ts": "2026-05-11T04:42:06.746009+00:00", "level": "DEBUG", "event": "state.加载需求.start", "run_id": "20260511-124159", "step": "020"}
+{"ts": "2026-05-11T04:42:06.746325+00:00", "level": "DEBUG", "event": "state.load_requirement", "run_id": "20260511-124159", "step": "020", "detail": {"chars": 16}}
+{"ts": "2026-05-11T04:42:06.746791+00:00", "level": "INFO", "event": "state.加载需求", "run_id": "20260511-124159", "step": "020", "duration": 0.001, "ok": true}
+{"ts": "2026-05-11T04:42:06.749567+00:00", "level": "DEBUG", "event": "state.检索上下文.start", "run_id": "20260511-124159", "step": "030"}
+{"ts": "2026-05-11T04:42:06.749888+00:00", "level": "DEBUG", "event": "state.retrieve_context", "run_id": "20260511-124159", "step": "030", "detail": {"input_chars": 16}}
+{"ts": "2026-05-11T04:42:06.750194+00:00", "level": "DEBUG", "event": "llm.request.start", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "messages": 2, "chars": 1050, "tools": 0}}
+{"ts": "2026-05-11T04:42:06.750783+00:00", "level": "ERROR", "event": "llm.request", "run_id": "20260511-124159", "detail": {"elapsed_ms": 0, "error": "network_error"}}
+{"ts": "2026-05-11T04:42:06.754303+00:00", "level": "ERROR", "event": "state.检索上下文.error", "run_id": "20260511-124159", "step": "030", "detail": "Request URL is missing an 'http://' or 'https://' protocol."}
+{"ts": "2026-05-11T04:42:06.754686+00:00", "level": "INFO", "event": "state.检索上下文", "run_id": "20260511-124159", "step": "030", "duration": 0.005, "ok": false}
+{"ts": "2026-05-11T04:42:06.755023+00:00", "level": "WARNING", "event": "state.检索上下文.retry", "run_id": "20260511-124159", "step": "030", "detail": {"attempt": 1, "wait": 1, "error": "Request URL is missing an 'http://' or 'https://' protocol."}}
+{"ts": "2026-05-11T04:42:07.757388+00:00", "level": "DEBUG", "event": "state.检索上下文.start", "run_id": "20260511-124159", "step": "030"}
+{"ts": "2026-05-11T04:42:07.759261+00:00", "level": "DEBUG", "event": "state.retrieve_context", "run_id": "20260511-124159", "step": "030", "detail": {"input_chars": 16}}
+{"ts": "2026-05-11T04:42:07.760313+00:00", "level": "DEBUG", "event": "llm.request.start", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "messages": 2, "chars": 1050, "tools": 0}}
+{"ts": "2026-05-11T04:42:07.762658+00:00", "level": "ERROR", "event": "llm.request", "run_id": "20260511-124159", "detail": {"elapsed_ms": 1, "error": "network_error"}}
+{"ts": "2026-05-11T04:42:07.767666+00:00", "level": "ERROR", "event": "state.检索上下文.error", "run_id": "20260511-124159", "step": "030", "detail": "Request URL is missing an 'http://' or 'https://' protocol."}
+{"ts": "2026-05-11T04:42:07.768245+00:00", "level": "INFO", "event": "state.检索上下文", "run_id": "20260511-124159", "step": "030", "duration": 0.012, "ok": false}
+{"ts": "2026-05-11T04:42:07.768736+00:00", "level": "WARNING", "event": "state.检索上下文.retry", "run_id": "20260511-124159", "step": "030", "detail": {"attempt": 2, "wait": 2, "error": "Request URL is missing an 'http://' or 'https://' protocol."}}
+{"ts": "2026-05-11T04:42:09.770796+00:00", "level": "DEBUG", "event": "state.检索上下文.start", "run_id": "20260511-124159", "step": "030"}
+{"ts": "2026-05-11T04:42:09.773164+00:00", "level": "DEBUG", "event": "state.retrieve_context", "run_id": "20260511-124159", "step": "030", "detail": {"input_chars": 16}}
+{"ts": "2026-05-11T04:42:09.775347+00:00", "level": "DEBUG", "event": "llm.request.start", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "messages": 2, "chars": 1050, "tools": 0}}
+{"ts": "2026-05-11T04:42:09.777010+00:00", "level": "ERROR", "event": "llm.request", "run_id": "20260511-124159", "detail": {"elapsed_ms": 0, "error": "network_error"}}
+{"ts": "2026-05-11T04:42:09.779551+00:00", "level": "ERROR", "event": "state.检索上下文.error", "run_id": "20260511-124159", "step": "030", "detail": "Request URL is missing an 'http://' or 'https://' protocol."}
+{"ts": "2026-05-11T04:42:09.779993+00:00", "level": "INFO", "event": "state.检索上下文", "run_id": "20260511-124159", "step": "030", "duration": 0.011, "ok": false}
+{"ts": "2026-05-11T04:42:09.780407+00:00", "level": "WARNING", "event": "state.检索上下文.retry", "run_id": "20260511-124159", "step": "030", "detail": {"attempt": 3, "wait": 4, "error": "Request URL is missing an 'http://' or 'https://' protocol."}}
+{"ts": "2026-05-11T04:42:13.783085+00:00", "level": "DEBUG", "event": "state.检索上下文.start", "run_id": "20260511-124159", "step": "030"}
+{"ts": "2026-05-11T04:42:13.785390+00:00", "level": "DEBUG", "event": "state.retrieve_context", "run_id": "20260511-124159", "step": "030", "detail": {"input_chars": 16}}
+{"ts": "2026-05-11T04:42:13.786527+00:00", "level": "DEBUG", "event": "llm.request.start", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "messages": 2, "chars": 1050, "tools": 0}}
+{"ts": "2026-05-11T04:42:13.787892+00:00", "level": "ERROR", "event": "llm.request", "run_id": "20260511-124159", "detail": {"elapsed_ms": 0, "error": "network_error"}}
+{"ts": "2026-05-11T04:42:13.789985+00:00", "level": "ERROR", "event": "state.检索上下文.error", "run_id": "20260511-124159", "step": "030", "detail": "Request URL is missing an 'http://' or 'https://' protocol."}
+{"ts": "2026-05-11T04:42:13.790520+00:00", "level": "INFO", "event": "state.检索上下文", "run_id": "20260511-124159", "step": "030", "duration": 0.009, "ok": false}
+{"ts": "2026-05-11T04:42:13.791002+00:00", "level": "ERROR", "event": "state.检索上下文.failed", "run_id": "20260511-124159", "step": "030", "detail": {"retries_exhausted": true, "error": "Request URL is missing an 'http://' or 'https://' protocol."}}
+{"ts": "2026-05-11T04:42:13.794227+00:00", "level": "DEBUG", "event": "state.理解需求.start", "run_id": "20260511-124159", "step": "040"}
+{"ts": "2026-05-11T04:42:13.794576+00:00", "level": "DEBUG", "event": "state.understand_requirement", "run_id": "20260511-124159", "step": "040", "detail": "无上下文，跳过"}
+{"ts": "2026-05-11T04:42:13.794971+00:00", "level": "INFO", "event": "state.理解需求", "run_id": "20260511-124159", "step": "040", "duration": 0.001, "ok": true}
+{"ts": "2026-05-11T04:42:13.798252+00:00", "level": "DEBUG", "event": "state.澄清判断.start", "run_id": "20260511-124159", "step": "050"}
+{"ts": "2026-05-11T04:42:13.798613+00:00", "level": "DEBUG", "event": "state.clarification_gate", "run_id": "20260511-124159", "step": "050"}
+{"ts": "2026-05-11T04:42:13.798958+00:00", "level": "DEBUG", "event": "llm.request.start", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "messages": 2, "chars": 1034, "tools": 0}}
+{"ts": "2026-05-11T04:42:13.799615+00:00", "level": "ERROR", "event": "llm.request", "run_id": "20260511-124159", "detail": {"elapsed_ms": 0, "error": "network_error"}}
+{"ts": "2026-05-11T04:42:13.801183+00:00", "level": "ERROR", "event": "state.澄清判断.error", "run_id": "20260511-124159", "step": "050", "detail": "Request URL is missing an 'http://' or 'https://' protocol."}
+{"ts": "2026-05-11T04:42:13.801579+00:00", "level": "INFO", "event": "state.澄清判断", "run_id": "20260511-124159", "step": "050", "duration": 0.003, "ok": false}
+{"ts": "2026-05-11T04:42:13.801933+00:00", "level": "ERROR", "event": "state.澄清判断.failed", "run_id": "20260511-124159", "step": "050", "detail": {"retries_exhausted": true, "error": "Request URL is missing an 'http://' or 'https://' protocol."}}
+{"ts": "2026-05-11T04:42:13.804764+00:00", "level": "INFO", "event": "agent.run.paused_human", "run_id": "20260511-124159", "step": "050"}
+{"ts": "2026-05-11T04:42:13.805198+00:00", "level": "DEBUG", "event": "llm.client_closed", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.805541+00:00", "level": "DEBUG", "event": "agent.shutdown", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.807290+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "run_id": "20260511-124159", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:42:13.815223+00:00", "level": "DEBUG", "event": "llm.client_init", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:42:13.816011+00:00", "level": "DEBUG", "event": "llm.client_closed", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.816339+00:00", "level": "DEBUG", "event": "agent.shutdown", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.820661+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "run_id": "20260511-124159", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:42:13.828200+00:00", "level": "DEBUG", "event": "llm.client_init", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}
+{"ts": "2026-05-11T04:42:13.828574+00:00", "level": "DEBUG", "event": "llm.client_closed", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.828865+00:00", "level": "DEBUG", "event": "agent.shutdown", "run_id": "20260511-124159"}
+{"ts": "2026-05-11T04:42:13.830416+00:00", "level": "DEBUG", "event": "llm.proxy_configured", "run_id": "20260511-124159", "detail": {"proxy": "http://127.0.0.1:7890"}}
+{"ts": "2026-05-11T04:42:13.839473+00:00", "level": "DEBUG", "event": "llm.client_init", "run_id": "20260511-124159", "detail": {"model": "${LLM_MODEL}", "base_url": "${LLM_BASE_URL}", "timeout": 120}}

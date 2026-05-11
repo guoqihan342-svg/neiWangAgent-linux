@@ -1,11 +1,10 @@
 """OpenAI-compatible LLM client for neiWangAgent.
 
 Uses httpx for HTTP calls. Supports chat completion with tool calling,
-configurable base URL / model via AppConfig, and structured prompting with a
-system prompt that describes the agent's state-machine role.
+configurable base URL / model via AppConfig, and structured prompting.
 
 ★ P7-37: 预算控制 — 跟踪 LLM 费用，超预算自动停止
-★ P2-12: 通用 API Key — 支持 LLM_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY
+★ P2-12: 通用 API Key — 通过 config.runtime.llm_api_key_env 指定环境变量名（默认 LLM_API_KEY）
 
 日志追踪：
   每次 LLM 调用自动记录：
@@ -62,12 +61,9 @@ class LLMClient:
         self.model: str = config.runtime.llm_model
         self.timeout: int = config.runtime.llm_timeout_seconds
 
+        # ★ P2-12: 通用 API Key — 仅从配置的 env 变量名读取
         api_key_env = getattr(config.runtime, 'llm_api_key_env', 'LLM_API_KEY')
-        self.api_key: str = (
-            os.environ.get(api_key_env, "")
-            or os.environ.get("DEEPSEEK_API_KEY", "")
-            or os.environ.get("OPENAI_API_KEY", "")
-        )
+        self.api_key: str = os.environ.get(api_key_env, "")
         if not self.api_key:
             logger.warning(f"{api_key_env} is not set - API calls will fail with 401/403.")
 

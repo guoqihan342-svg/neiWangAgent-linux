@@ -688,6 +688,7 @@ def resolve_env_vars(value: str) -> str:
 
 # ============================================================================
 # ★ P3-16: 预定义配置 Profiles
+# ★ v0.2.0: 所有外网URL统一走环境变量，不硬编码
 # ============================================================================
 
 # 企业内网 Profile（默认）
@@ -701,13 +702,17 @@ INTERNAL_PROFILE = {
     "mr": {"provider": "internal_mcp"},
 }
 
-# GitHub Demo Profile（自测用）
+# GitHub Demo Profile（自测用 — 同样走环境变量，不自带硬编码URL）
+# 使用前设置: export LLM_BASE_URL=https://api.deepseek.com/v1
+#            export LLM_MODEL=deepseek-v4-flash
+#            export LLM_API_KEY=sk-xxx
+#            export GITHUB_TOKEN=ghp_xxx
 GITHUB_DEMO_PROFILE = {
     "project": {"code_platform": "github"},
     "runtime": {
-        "llm_base_url": "https://api.deepseek.com/v1",
-        "llm_model": "deepseek-v4-flash",
-        "llm_api_key_env": "DEEPSEEK_API_KEY",
+        "llm_base_url": "${LLM_BASE_URL}",
+        "llm_model": "${LLM_MODEL}",
+        "llm_api_key_env": "LLM_API_KEY",
     },
     "mr": {"provider": "github"},
 }

@@ -30,7 +30,7 @@ neiWangAgent — 本地无服务器 MCP Agent v0.1.8
     - 多语言 deny_paths 自动适配
 
 使用方式：
-    export DEEPSEEK_API_KEY='sk-xxx'
+    export LLM_API_KEY='sk-xxx'      # LLM API Key
     agent init          # 初始化项目
     agent warmup        # 构建知识库
     agent run --task task.md   # 执行完整流程

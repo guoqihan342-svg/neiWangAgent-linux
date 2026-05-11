@@ -163,10 +163,16 @@ security:
   blocked_commands: ["sudo", "rm -rf /", "kubectl"]
 """
 
-# GitHub Demo Profile 配置（自测用）
+# GitHub Demo Profile 配置（自测用 — 全部走环境变量）
 GITHUB_DEMO_CONFIG_YAML = r"""# =============================================================================
 # neiWangAgent — Configuration (Profile: github-demo)
-# ★ P3-16: GitHub + DeepSeek 自测用
+# ★ v0.2.0: 全部走环境变量，无硬编码外网URL
+#
+# 使用前设置环境变量:
+#   export LLM_BASE_URL=https://api.deepseek.com/v1
+#   export LLM_MODEL=deepseek-v4-flash
+#   export LLM_API_KEY=sk-xxx
+#   export GITHUB_TOKEN=ghp_xxx
 # =============================================================================
 
 project:
@@ -180,9 +186,9 @@ runtime:
   transport: "stdio"
   llm_timeout_seconds: 120
   mcp_timeout_seconds: 30
-  llm_base_url: "https://api.deepseek.com/v1"
-  llm_model: "deepseek-v4-flash"
-  llm_api_key_env: "DEEPSEEK_API_KEY"
+  llm_base_url: "${LLM_BASE_URL}"
+  llm_model: "${LLM_MODEL}"
+  llm_api_key_env: "LLM_API_KEY"
   max_concurrent_mcp_calls: 5
   max_retries: 3
 
