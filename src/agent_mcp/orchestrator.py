@@ -440,59 +440,44 @@ class Orchestrator:
 
     def _handle_worktree_guard(self):
         """
-        [018] 工作区保护检查 — 确保工作区干净才能继续。
+        [018] 工作区保护检查 — 通过 Git MCP Server。
 
-        流程：
-          1. 读取配置中的 worktree_policy
-          2. 执行 git status --porcelain 检查变更
-          3. 如果允许未跟踪文件且仅有未跟踪文件 → 通过
-          4. 如果有已跟踪文件的修改 → 抛出 RuntimeError
-
-        方案 v4 §8.1：require_clean_before_run=true 强制要求干净工作区
+        ★ P3-17: 使用 git_status MCP 工具（替代直接 subprocess）。
 
         日志：记录文件变更数、状态（clean/dirty）
         """
         require_clean = self.config.git.worktree_policy.require_clean_before_run
         allow_untracked = self.config.git.worktree_policy.allow_untracked
 
-        # ── 策略允许跳过检查 ──
         if not require_clean:
             self.tracer.debug("state.worktree_guard", step="018", detail="策略跳过")
             print("    ⏭️ 跳过工作区检查（策略配置）")
             return
 
-        # ── 执行 git status ──
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True, text=True, check=True
-        )
-        lines = result.stdout.strip().splitlines()
+        # ★ P3-17: 通过 Git MCP 获取状态
+        status_resp = self._mcp_call(self._git_mcp, "git_status")
+        changed = status_resp.get("changed_files", [])
+        is_clean = status_resp.get("clean", False)
 
-        # ── 干净工作区 ──
-        if not lines:
+        if is_clean or not changed:
             self.tracer.debug("state.worktree_guard", step="018",
                               detail={"status": "clean"})
             print("    ✅ 工作区干净")
             return
 
-        # ── 过滤分析变更类型 ──
-        # git status --porcelain 格式：XY filename
-        #   X=暂存区状态, Y=工作区状态
-        #   ?? = 未跟踪
-        untracked_only = all(line.startswith("??") for line in lines)
+        untracked_only = all(
+            line.startswith("??") for line in changed if line.strip()
+        )
 
-        # ── 允许未跟踪文件 ──
         if allow_untracked and untracked_only:
             self.tracer.debug("state.worktree_guard", step="018",
-                              detail={"status": "untracked_only", "count": len(lines)})
+                              detail={"status": "untracked_only", "count": len(changed)})
             print("    ✅ 仅存在未跟踪文件（允许）")
             return
 
-        # ── 筛选已跟踪文件的修改 ──
-        dirty = [l for l in lines if not l.startswith("??")]
+        dirty = [l for l in changed if not l.startswith("??")]
         count = len(dirty)
 
-        # ── 抛出错误（阻止运行） ──
         self.tracer.warning("state.worktree_guard", step="018",
                             detail={"status": "dirty", "count": count, "files": dirty[:10]})
         raise RuntimeError(
@@ -918,23 +903,20 @@ class Orchestrator:
 
     def _resolve_repo_name(self) -> str:
         """
-        ★ P1-6: 解析 GitHub repo 名（owner/repo）。
+        ★ P3-17: 通过 Git MCP 解析 repo 名。
 
         从 git remote origin URL 提取 owner/repo。
-        支持 git@github.com:owner/repo.git 和 https://github.com/owner/repo.git 格式。
         """
         try:
-            remote_result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, check=True
-            )
-            remote_url = remote_result.stdout.strip()
+            result = self._mcp_call(self._git_mcp, "git_remote_get_url",
+                                    remote_name="origin")
+            remote_url = result.get("url", "")
             if "github.com" in remote_url:
-                m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", remote_url)
+                m = re.search(r"github\\.com[:/](.+?)(?:\\.git)?$", remote_url)
                 if m:
                     return m.group(1)
             return "unknown/unknown"
-        except subprocess.CalledProcessError:
+        except Exception:
             return "unknown/unknown"
 
     def _handle_done(self):

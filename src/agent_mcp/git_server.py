@@ -85,6 +85,15 @@ class GitMCPServer(BaseMCPServer):
                     }
                 }
             },
+            "git_remote_get_url": {
+                "description": "获取远程仓库 URL",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "remote_name": {"type": "string", "default": "origin"}
+                    }
+                }
+            },
         }
 
     def _call_tool(self, name: str, args: dict):
@@ -96,6 +105,7 @@ class GitMCPServer(BaseMCPServer):
             "git_commit": self._commit,
             "git_push": self._push,
             "git_log": self._log,
+            "git_remote_get_url": self._remote_get_url,
         }.get(name)
 
         if handler:
@@ -168,6 +178,13 @@ class GitMCPServer(BaseMCPServer):
     def _log(self, limit: int = 50) -> dict:
         rc, out, err = self._run(["git", "log", f"-{limit}", "--oneline", "--decorate"])
         return {"commits": out.split("\n") if out else []}
+
+    def _remote_get_url(self, remote_name: str = "origin") -> dict:
+        """★ P3-17: 获取远程仓库 URL。"""
+        rc, out, err = self._run(["git", "remote", "get-url", remote_name])
+        if rc != 0:
+            raise RuntimeError(f"获取 remote URL 失败: {err}")
+        return {"remote": remote_name, "url": out}
 
 
 if __name__ == "__main__":

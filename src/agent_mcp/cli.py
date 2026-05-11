@@ -44,21 +44,27 @@ PROJECT_ROOT: Path = _find_project_root()
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG_YAML = r"""# =============================================================================
-# neiWangAgent — Configuration
+# neiWangAgent — Configuration (Profile: internal)
+# ★ P3-16: 企业内网默认 — LLM 配置走环境变量
 # =============================================================================
 
 project:
   name: "neiWangAgent"
   default_branch: "master"
-  code_platform: "github"
+  code_platform: "internal_custom"  # 企业内网
+  project_type: "generic"
 
 runtime:
   mode: "local_mcp"
   transport: "stdio"
   llm_timeout_seconds: 120
   mcp_timeout_seconds: 30
-  llm_base_url: "https://api.deepseek.com/v1"
-  llm_model: "deepseek-v4-flash"
+  # ★ 从环境变量读取（不硬编码）
+  llm_base_url: "${LLM_BASE_URL}"
+  llm_model: "${LLM_MODEL}"
+  llm_api_key_env: "LLM_API_KEY"
+  max_concurrent_mcp_calls: 5
+  max_retries: 3
 
 task:
   stop_after_create_mr: true
@@ -66,6 +72,7 @@ task:
   enable_self_review: false
   max_clarification_rounds: 3
   max_questions_per_round: 5
+  budget_cents: 20
 
 mcp:
   servers:
@@ -105,13 +112,18 @@ knowledge:
       build_on_first_warmup: true
       rebuild_trigger: "manual"
   business_docs_dir: "./business-docs"
+  source_extensions: [".java", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue"]
 
 database:
   enabled: false
   mode: "local_docs_and_code_only"
+  db_type: "postgresql"
+  orm: ["mybatis", "mybatis_plus"]
   write_connection:
     enabled: false
     current_version_behavior: "never_execute_write_sql"
+  ddl_dir: "./business-docs/database/ddl"
+  data_dictionary_dir: "./business-docs/database/data-dictionary"
 
 git:
   target_branch: "master"
@@ -128,10 +140,139 @@ git:
   allow_force_push: false
   protected_branches: ["master", "main"]
 
+mr:
+  provider: "internal_mcp"  # ★ 企业内网默认
+  target_branch: "master"
+  title_template: "[Agent] {task_title}"
+  require_untested_marker: true
+
+clarification:
+  enabled: true
+  default_mode: "file"
+  max_questions_per_round: 5
+  max_clarification_rounds: 3
+
 change_policy:
   max_files_changed: 20
   max_lines_changed: 800
-  deny_paths: ["pom.xml", "package-lock.json", ".env", "*.pem", "*.key"]
+  deny_paths: [".env", "*.pem", "*.key", "Dockerfile", "docker-compose*.yml"]
+
+security:
+  allowed_paths: [".", "./business-docs", "./.agent"]
+  deny_paths: ["~/.ssh", "~/.git-credentials", ".env", "*.pem", "*.key"]
+  blocked_commands: ["sudo", "rm -rf /", "kubectl"]
+"""
+
+# GitHub Demo Profile 配置（自测用）
+GITHUB_DEMO_CONFIG_YAML = r"""# =============================================================================
+# neiWangAgent — Configuration (Profile: github-demo)
+# ★ P3-16: GitHub + DeepSeek 自测用
+# =============================================================================
+
+project:
+  name: "neiWangAgent"
+  default_branch: "main"
+  code_platform: "github"
+  project_type: "generic"
+
+runtime:
+  mode: "local_mcp"
+  transport: "stdio"
+  llm_timeout_seconds: 120
+  mcp_timeout_seconds: 30
+  llm_base_url: "https://api.deepseek.com/v1"
+  llm_model: "deepseek-v4-flash"
+  llm_api_key_env: "DEEPSEEK_API_KEY"
+  max_concurrent_mcp_calls: 5
+  max_retries: 3
+
+task:
+  stop_after_create_mr: true
+  enable_tests: false
+  enable_self_review: false
+  max_clarification_rounds: 3
+  max_questions_per_round: 5
+  budget_cents: 20
+
+mcp:
+  servers:
+    knowledge:
+      command: "python"
+      args: ["-m", "agent_mcp.knowledge_server"]
+    requirement:
+      command: "python"
+      args: ["-m", "agent_mcp.requirement_server"]
+    database:
+      command: "python"
+      args: ["-m", "agent_mcp.database_server"]
+    git:
+      command: "python"
+      args: ["-m", "agent_mcp.git_server"]
+    mr:
+      command: "python"
+      args: ["-m", "agent_mcp.mr_server"]
+    clarification:
+      command: "python"
+      args: ["-m", "agent_mcp.clarification_server"]
+
+knowledge:
+  layers:
+    summary:
+      auto_refresh_before_run: true
+      diff_base_strategy: "merge_base"
+      target_branch: "main"
+      max_recent_commits: 50
+    hotspot:
+      build_on_warmup: true
+      auto_refresh_interval: "24h"
+      max_commits_to_scan: 100
+      core_modules: []
+      blame_key_files: []
+    deep:
+      build_on_first_warmup: true
+      rebuild_trigger: "manual"
+  business_docs_dir: "./business-docs"
+  source_extensions: [".java", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue"]
+
+database:
+  enabled: false
+  mode: "local_docs_and_code_only"
+  db_type: "postgresql"
+  write_connection:
+    enabled: false
+    current_version_behavior: "never_execute_write_sql"
+
+git:
+  target_branch: "main"
+  branch_prefix: "agent/"
+  branch_naming:
+    template: "agent/{yyyyMMdd}-{task_slug}"
+  worktree_policy:
+    require_clean_before_run: true
+    allow_untracked: false
+  allow_commit: true
+  allow_push: true
+  allow_create_mr: true
+  allow_merge: false
+  allow_force_push: false
+  protected_branches: ["master", "main"]
+
+mr:
+  provider: "github"
+  target_branch: "main"
+  title_template: "[Agent] {task_title}"
+  require_untested_marker: true
+
+clarification:
+  enabled: true
+  default_mode: "file"
+  max_questions_per_round: 5
+  max_clarification_rounds: 3
+
+change_policy:
+  max_files_changed: 20
+  max_lines_changed: 800
+  deny_paths: [".env", "*.pem", "*.key"]
 
 security:
   allowed_paths: [".", "./business-docs", "./.agent"]
@@ -162,7 +303,7 @@ DEFAULT_BUSINESS_README = """# business-docs
 # =============================================================================
 
 @click.group()
-@click.version_option(version="0.1.5", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
+@click.version_option(version="0.1.6", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
 def main() -> None:
     """neiWangAgent — 本地 MCP Agent，自动改代码 → commit → push → 创建 MR。"""
     pass
@@ -173,18 +314,28 @@ def main() -> None:
 # =============================================================================
 
 @main.command("init")
-def cmd_init() -> None:
+@click.option(
+    "--profile", "-p",
+    type=click.Choice(["internal", "github-demo"]),
+    default="internal",
+    help="配置模板: internal(企业内网默认) / github-demo(GitHub+DeepSeek自测)"
+)
+def cmd_init(profile: str) -> None:
     """初始化项目结构。
 
     创建以下内容：
         .agent/              工作目录
         .agent/runs/         运行记录目录
-        .agent/logs/         日志目录（★ 新增）
+        .agent/logs/         日志目录
         config.yaml          默认配置文件（如不存在）
         business-docs/       业务文档目录
         business-docs/README.md
+
+    ★ P3-16: --profile 选择配置模板
+      - internal:    企业内网默认（LLM_BASE_URL/LLM_MODEL/LLM_API_KEY 环境变量）
+      - github-demo: GitHub + DeepSeek 自测用
     """
-    tracer.info("cli.init.start")  # ★ 日志：命令开始
+    tracer.info("cli.init.start", detail={"profile": profile})
     root = PROJECT_ROOT
     created: list[str] = []
     skipped: list[str] = []
@@ -216,7 +367,12 @@ def cmd_init() -> None:
     # --- config.yaml ---
     config_path = root / "config.yaml"
     if not config_path.exists():
-        config_path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+        # ★ P3-16: 根据 profile 选择配置模板
+        config_content = (
+            GITHUB_DEMO_CONFIG_YAML if profile == "github-demo"
+            else DEFAULT_CONFIG_YAML
+        )
+        config_path.write_text(config_content, encoding="utf-8")
         created.append("config.yaml")
     else:
         skipped.append("config.yaml（已存在，未覆盖）")

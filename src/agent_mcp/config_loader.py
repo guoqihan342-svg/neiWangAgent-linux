@@ -650,6 +650,86 @@ class AppConfig(BaseModel):
 
 
 # ============================================================================
+# ★ P3-16: 环境变量解析
+# ============================================================================
+
+def resolve_env_vars(value: str) -> str:
+    """
+    解析配置值中的环境变量引用。
+
+    支持格式：
+      ${VAR_NAME}   — 替换为环境变量值，未设置则保留原样
+      ${VAR:default} — 替换为环境变量值，未设置则使用 default
+    """
+    import re as _re
+    import os as _os
+
+    def _replacer(match):
+        expr = match.group(1)
+        if ":" in expr:
+            var_name, default = expr.split(":", 1)
+            return _os.environ.get(var_name, default)
+        return _os.environ.get(expr, match.group(0))
+
+    return _re.sub(r"\$\{([^}]+)\}", _replacer, value)
+
+
+# ============================================================================
+# ★ P3-16: 预定义配置 Profiles
+# ============================================================================
+
+# 企业内网 Profile（默认）
+INTERNAL_PROFILE = {
+    "project": {"code_platform": "internal_custom"},
+    "runtime": {
+        "llm_base_url": "${LLM_BASE_URL}",
+        "llm_model": "${LLM_MODEL}",
+        "llm_api_key_env": "LLM_API_KEY",
+    },
+    "mr": {"provider": "internal_mcp"},
+}
+
+# GitHub Demo Profile（自测用）
+GITHUB_DEMO_PROFILE = {
+    "project": {"code_platform": "github"},
+    "runtime": {
+        "llm_base_url": "https://api.deepseek.com/v1",
+        "llm_model": "deepseek-v4-flash",
+        "llm_api_key_env": "DEEPSEEK_API_KEY",
+    },
+    "mr": {"provider": "github"},
+}
+
+PROFILES: dict[str, dict] = {
+    "internal": INTERNAL_PROFILE,
+    "github-demo": GITHUB_DEMO_PROFILE,
+}
+
+
+def apply_profile(base_config: dict, profile_name: str) -> dict:
+    """
+    将 profile 配置合并到基础配置中（浅合并）。
+
+    参数：
+        base_config: 基础配置字典
+        profile_name: profile 名称（internal / github-demo）
+
+    返回：
+        dict: 合并后的配置
+    """
+    import copy
+    profile = PROFILES.get(profile_name)
+    if not profile:
+        raise ValueError(f"未知 profile: {profile_name}，可选: {list(PROFILES.keys())}")
+    merged = copy.deepcopy(base_config)
+    for section, values in profile.items():
+        if section not in merged:
+            merged[section] = {}
+        merged[section].update(values)
+    return merged
+
+
+# ============================================================================
 # Config loader — the public API
 # ============================================================================
 
@@ -694,7 +774,26 @@ class ConfigLoader:
 
     def _load(self) -> AppConfig:
         raw = self._read_yaml()
+        # ★ P3-16: 解析环境变量引用
+        raw = self._resolve_env_in_config(raw)
         return AppConfig.from_yaml(raw)
+
+    @staticmethod
+    def _resolve_env_in_config(data: dict) -> dict:
+        """递归解析配置中的所有 ${VAR} 引用。"""
+        import copy
+        resolved = copy.deepcopy(data)
+        for key, value in resolved.items():
+            if isinstance(value, str):
+                resolved[key] = resolve_env_vars(value)
+            elif isinstance(value, dict):
+                resolved[key] = ConfigLoader._resolve_env_in_config(value)
+            elif isinstance(value, list):
+                resolved[key] = [
+                    resolve_env_vars(v) if isinstance(v, str) else v
+                    for v in value
+                ]
+        return resolved
 
     def _read_yaml(self) -> dict[str, Any]:
         if not self._config_path.is_file():

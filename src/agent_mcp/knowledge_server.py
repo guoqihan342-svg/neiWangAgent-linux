@@ -460,20 +460,23 @@ class KnowledgeMCPServer(BaseMCPServer):
         """
         Deep 层：深度代码索引。
 
+        ★ P3-18: 新增 Java/MyBatis Mapper→Entity 映射 + Vue 组件/路由分析
+
         输出：
           - import/dependency 提取
           - 函数/类定义计数
-          - 文件间引用关系（简化版）
+          - Mapper→Entity 映射（Java/MyBatis）
+          - Vue 组件树 + 路由分析
+          - 文件间引用关系
         """
         imports: dict[str, list[str]] = {}
-        definitions: dict[str, int] = {}  # 文件 → 定义数
+        definitions: dict[str, int] = {}
 
-        # ── 各语言的 import 模式 ──
         import_patterns = {
-            "java": r"^import\s+([\w.]+)",
-            "python": r"^(?:from|import)\s+([\w.]+)",
-            "go": r'"([^"]+)"',
-            "typescript": r"^(?:import\s+.*?from\s+['\"]|require\()['\"]([^'\"]+)",
+            "java": r"^import\\s+([\\w.]+)",
+            "python": r"^(?:from|import)\\s+([\\w.]+)",
+            "go": r'\"([^\"]+)\"',
+            "typescript": r"^(?:import\\s+.*?from\\s+['\\\"]|require\\()['\\\"]([^'\\\"]+)",
         }
 
         import re
@@ -489,30 +492,217 @@ class KnowledgeMCPServer(BaseMCPServer):
             except Exception:
                 continue
 
-            # ── 提取 import ──
             pattern = import_patterns.get(lang)
             if pattern:
                 matches = re.findall(pattern, content, re.MULTILINE)
                 if matches:
-                    imports[rel] = list(set(matches))  # 去重
+                    imports[rel] = list(set(matches))
 
-            # ── 统计定义数 ──
             def_count = 0
             if lang in ("java", "typescript", "go"):
-                def_count += len(re.findall(r"^\s*(?:public\s+)?(?:class|interface|enum)\s+", content, re.MULTILINE))
+                def_count += len(re.findall(r"^\\s*(?:public\\s+)?(?:class|interface|enum)\\s+", content, re.MULTILINE))
             if lang == "python":
-                def_count += len(re.findall(r"^\s*(?:def|class|async def)\s+", content, re.MULTILINE))
+                def_count += len(re.findall(r"^\\s*(?:def|class|async def)\\s+", content, re.MULTILINE))
             if lang in ("typescript", "vue"):
-                def_count += len(re.findall(r"^\s*(?:export\s+)?(?:function|const|class)\s+", content, re.MULTILINE))
+                def_count += len(re.findall(r"^\\s*(?:export\\s+)?(?:function|const|class)\\s+", content, re.MULTILINE))
 
             definitions[rel] = def_count
+
+        # ★ P3-18: MyBatis Mapper → Entity 映射
+        mapper_entity = self._build_mapper_entity_mapping(files, root)
+
+        # ★ P3-18: Vue 组件树 + 路由
+        vue_analysis = self._build_vue_component_tree(files, root)
 
         return {
             "imports": imports,
             "definitions": definitions,
             "total_definitions": sum(definitions.values()),
+            "mapper_entity_mapping": mapper_entity,
+            "vue_analysis": vue_analysis,
             "message": f"Deep 层: {len(imports)} 个文件有依赖, "
-                       f"{sum(definitions.values())} 个定义",
+                       f"{sum(definitions.values())} 个定义, "
+                       f"{len(mapper_entity)} 个 Mapper→Entity 映射, "
+                       f"{len(vue_analysis.get('components', []))} 个 Vue 组件",
+        }
+
+    # ------------------------------------------------------------------
+    # ★ P3-18: Java/MyBatis Mapper → Entity 映射
+    # ------------------------------------------------------------------
+
+    def _build_mapper_entity_mapping(
+        self, files: list[Path], root: Path
+    ) -> dict[str, dict]:
+        """
+        分析 MyBatis Mapper XML 与 Java Entity 的映射关系。
+
+        策略：
+          1. 找到所有 *Mapper.xml 文件
+          2. 解析 <resultMap> / <select> / <insert> 中的 parameterType / resultType
+          3. 匹配到 Java Entity 类
+        """
+        import re
+
+        mappings: dict[str, dict] = {}
+        entity_classes: dict[str, Path] = {}
+
+        # ── 先收集所有 Java Entity ──
+        for f in files:
+            if f.suffix == ".java":
+                try:
+                    content = f.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                # 匹配 @Entity / @Table / @TableName 注解
+                if re.search(r"@(?:Entity|Table|TableName)\\b", content):
+                    try:
+                        rel = str(f.relative_to(root))
+                    except ValueError:
+                        rel = str(f)
+                    # 提取类名
+                    m = re.search(r"class\\s+(\\w+)", content)
+                    if m:
+                        entity_classes[m.group(1)] = Path(rel)
+
+        # ── 解析 Mapper XML ──
+        for f in files:
+            if not f.name.endswith("Mapper.xml") and not f.name.endswith(".xml"):
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+
+            try:
+                rel = str(f.relative_to(root))
+            except ValueError:
+                rel = str(f)
+
+            # 提取 namespace
+            ns_match = re.search(r'<mapper\\s+namespace=\"([^\"]+)\"', content)
+            namespace = ns_match.group(1) if ns_match else ""
+
+            # 提取所有 resultType / parameterType 引用
+            type_refs = set()
+            for type_match in re.finditer(
+                r'(?:resultType|parameterType|resultMap)=\"([^\"]+)\"',
+                content
+            ):
+                type_name = type_match.group(1)
+                # 去掉包名前缀，只保留类名
+                simple_name = type_name.split(".")[-1] if "." in type_name else type_name
+                type_refs.add(simple_name)
+
+            # ── 匹配 Entity ──
+            mapped_entities = []
+            for ref in type_refs:
+                if ref in entity_classes:
+                    mapped_entities.append({
+                        "entity_class": ref,
+                        "entity_file": str(entity_classes[ref]),
+                    })
+
+            if mapped_entities:
+                mappings[rel] = {
+                    "mapper_file": rel,
+                    "namespace": namespace,
+                    "entities": mapped_entities,
+                    "type_references": list(type_refs),
+                }
+
+        return mappings
+
+    # ------------------------------------------------------------------
+    # ★ P3-18: Vue 组件树 + 路由分析
+    # ------------------------------------------------------------------
+
+    def _build_vue_component_tree(
+        self, files: list[Path], root: Path
+    ) -> dict:
+        """
+        分析 Vue SFC 组件结构和路由定义。
+
+        策略：
+          1. 找到所有 .vue 文件
+          2. 解析 <script setup> 中的组件名和 props
+          3. 找到 router 配置文件，提取路由表
+        """
+        import re
+
+        components: list[dict] = []
+        routes: list[dict] = []
+
+        for f in files:
+            try:
+                rel = str(f.relative_to(root))
+            except ValueError:
+                rel = str(f)
+
+            # ── Vue SFC 组件 ──
+            if f.suffix == ".vue":
+                try:
+                    content = f.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                comp_info: dict = {"file": rel}
+
+                # 提取组件名（从 <script setup> 或 export default）
+                name_match = re.search(
+                    r"(?:name\\s*:\\s*['\\\"]([^'\\\"]+)['\\\"]|defineComponent\\s*\\(\\s*\\{\\s*name\\s*:\\s*['\\\"]([^'\\\"]+))",
+                    content
+                )
+                if name_match:
+                    comp_info["name"] = name_match.group(1) or name_match.group(2)
+
+                # 提取 props
+                props_match = re.search(r"(?:props\\s*:\\s*\\{|defineProps\\s*\\(\\s*\\{)", content)
+                comp_info["has_props"] = bool(props_match)
+
+                # 提取 emits
+                emits_match = re.search(r"(?:emits\\s*:\\s*\\[|defineEmits\\s*\\()", content)
+                comp_info["has_emits"] = bool(emits_match)
+
+                # 是否有 <template>
+                comp_info["has_template"] = "<template>" in content
+
+                components.append(comp_info)
+
+            # ── Vue Router 配置 ──
+            if f.name in ("router.js", "router.ts", "routes.js", "routes.ts"):
+                try:
+                    content = f.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+
+                # 提取路由定义
+                for route_match in re.finditer(
+                    r"\\{\\s*path\\s*:\\s*['\\\"]([^'\\\"]+)['\\\"].*?component\\s*:\\s*(\\w+)",
+                    content, re.DOTALL
+                ):
+                    routes.append({
+                        "path": route_match.group(1),
+                        "component": route_match.group(2),
+                        "router_file": rel,
+                    })
+
+                # 提取嵌套路由
+                for child_match in re.finditer(
+                    r"path\\s*:\\s*['\\\"]([^'\\\"]+)['\\\"].*?component\\s*:\\s*\\s*\\(\\)\\s*=>\\s*import\\s*\\(['\\\"]([^'\\\"]+)",
+                    content
+                ):
+                    routes.append({
+                        "path": child_match.group(1),
+                        "component": child_match.group(2).split("/")[-1],
+                        "router_file": rel,
+                        "lazy_loaded": True,
+                    })
+
+        return {
+            "components": components,
+            "component_count": len(components),
+            "routes": routes,
+            "route_count": len(routes),
         }
 
     def _search(
