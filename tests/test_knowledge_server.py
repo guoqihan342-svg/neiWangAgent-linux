@@ -62,6 +62,11 @@ class TestIndexAndSearch:
             assert "python" in result.get("language_distribution", {})
 
     def test_search_before_index(self):
+        # ★ 确保没有残留 knowledge 索引影响
+        import shutil
+        kb_dir = Path(".agent/knowledge")
+        if kb_dir.exists():
+            shutil.rmtree(kb_dir)
         result = self.ks._search("test")
         assert result["total_files"] == 0
 

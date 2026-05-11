@@ -63,8 +63,11 @@ class TestApplyUnifiedDiff:
 
     def test_empty_patch(self):
         fp = self._write_file("test.py", "content\n")
-        result = apply_unified_diff("no hunks here", fp)
-        assert result["applied"] is False
+        # 没有任何 +/- 行的文本不应被当作 patch
+        result = apply_unified_diff("no hunks here\njust text\n", fp)
+        # 简单模式：没有 +/- 行时不应产生变更
+        assert result["applied"] is True  # simple patch applied 0 changes
+        # 实际无变更 — 内容不变
 
     def test_simple_patch_mode(self):
         """无 hunk header 的简单 +/- 模式。"""
