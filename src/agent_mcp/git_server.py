@@ -4,6 +4,7 @@ Git MCP Server v0.1 — 版本控制操作
 职责：branch/commit/push（仅 agent/* 分支）
 安全约束：禁止操作 master/main/release/hotfix
 ★ 日志追踪：每个 git 命令记录耗时和结果
+★ 继承 BaseMCPServer：消除重复 stdio 代码
 """
 
 import json
@@ -12,25 +13,24 @@ import subprocess
 import time
 from pathlib import Path
 
-from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
+from agent_mcp.tracing import get_tracer, Tracer
+from agent_mcp.base_mcp import BaseMCPServer  # ★ 继承基类
 
 
-class GitMCPServer:
+class GitMCPServer(BaseMCPServer):
     """
     Git MCP Server — 通过 stdio JSON-RPC 提供版本控制功能。
 
-    安全约束（方案 v4 §8.3）：
-      - 仅允许操作 agent/ 开头的分支
-      - 禁止操作 master/main/release/hotfix
-      - 禁止 force push
-
-    日志追踪：
-      每个工具调用自动记录命令、参数、耗时和结果。
+    继承 BaseMCPServer，只需定义 tools 和 _call_tool。
     """
+
+    name = "git-mcp"
+    version = "0.1.0"
     PROTECTED = ["master", "main", "release/", "hotfix/"]
 
     def __init__(self):
-        self.tracer: Tracer = get_tracer()  # ★ 日志追踪器
+        super().__init__()
+        self.tracer: Tracer = get_tracer()
         self.tools = {
             "git_status": {
                 "description": "查看工作区状态",
@@ -87,15 +87,8 @@ class GitMCPServer:
             },
         }
 
-    def handle_request(self, method: str, params: dict | None = None):
-        if method == "tools/list":
-            return [{"name": k, **v} for k, v in self.tools.items()]
-        elif method == "tools/call":
-            return self._call_tool(params.get("name", ""), params.get("arguments", {}))
-        return {"error": f"Unknown method: {method}"}
-
     def _call_tool(self, name: str, args: dict):
-        """调用具体工具，带日志追踪。"""
+        """实现基类的抽象方法。"""
         handler = {
             "git_status": self._status,
             "git_diff": self._diff,
@@ -107,19 +100,18 @@ class GitMCPServer:
 
         if handler:
             try:
-                start = time.perf_counter()  # ★ 计时
-                self.tracer.debug(f"git.{name}.start", detail=args)  # ★ 日志
+                start = time.perf_counter()
+                self.tracer.debug(f"git.{name}.start", detail=args)
                 result = handler(**args)
                 elapsed = time.perf_counter() - start
-                self.tracer.info(f"git.{name}", duration=elapsed, ok=True, detail=args)  # ★ 日志
+                self.tracer.info(f"git.{name}", duration=elapsed, ok=True, detail=args)
                 return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
             except Exception as e:
-                self.tracer.error(f"git.{name}", detail=str(e))  # ★ 错误日志
+                self.tracer.error(f"git.{name}", detail=str(e))
                 return {"content": [{"type": "text", "text": f"Error: {e}"}], "isError": True}
         return {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}
 
     def _run(self, cmd: list[str], cwd: str = ".") -> tuple[int, str, str]:
-        """执行 shell 命令。"""
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
 
@@ -167,34 +159,5 @@ class GitMCPServer:
         return {"commits": out.split("\n") if out else []}
 
 
-def main():
-    server = GitMCPServer()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-            req_id = request.get("id")
-            method = request.get("method", "")
-            if method == "initialize":
-                response = {"jsonrpc": "2.0", "id": req_id,
-                           "result": {"protocolVersion": "2024-11-05",
-                                      "serverInfo": {"name": "git-mcp", "version": "0.1.0"},
-                                      "capabilities": {"tools": {}}}}
-            elif method == "notifications/initialized":
-                continue
-            else:
-                result = server.handle_request(method, request.get("params", {}))
-                response = {"jsonrpc": "2.0", "id": req_id, "result": result}
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
-        except json.JSONDecodeError:
-            continue
-        except Exception as e:
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}}) + "\n")
-            sys.stdout.flush()
-
-
 if __name__ == "__main__":
-    main()
+    GitMCPServer().run_stdio()

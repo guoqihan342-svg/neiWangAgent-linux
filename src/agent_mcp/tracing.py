@@ -164,10 +164,10 @@ def _build_logger(name: str = "neiWangAgent") -> logging.Logger:
     logger.setLevel(logging.DEBUG)  # logger 本身接受所有级别，由 handler 过滤
     logger.propagate = False        # 不向根 logger 传递，避免重复输出
 
-    # ========== 控制台 Handler（WARNING+） ==========
+    # ========== 控制台 Handler（INFO+，★ 降低级别方便查看进度） ==========
     if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
         console = logging.StreamHandler(sys.stderr)
-        console.setLevel(logging.WARNING)  # 控制台只显示警告和错误
+        console.setLevel(logging.INFO)  # ★ INFO 级别：显示状态转换
         console.setFormatter(ConsoleFormatter())
         logger.addHandler(console)
 

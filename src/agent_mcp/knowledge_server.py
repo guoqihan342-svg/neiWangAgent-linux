@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
+from agent_mcp.base_mcp import BaseMCPServer  # ★ 继承基类
 
 
 # =============================================================================
@@ -108,21 +109,24 @@ LANGUAGE_PATTERNS: dict[str, dict[str, list[str]]] = {
 }
 
 
-class KnowledgeMCPServer:
+class KnowledgeMCPServer(BaseMCPServer):
     """
     知识库 MCP Server — 三层预热模型 + 多语言支持。
+
+    继承 BaseMCPServer。
 
     功能：
       - knowledge_index_codebase: 索引代码库（按层级）
       - knowledge_search:         搜索知识库
       - knowledge_stats:          获取索引统计
       - knowledge_language_detect: 检测项目语言类型
-
-    日志追踪：
-      每层索引独立计时，记录文件数、语言分布。
     """
 
+    name = "knowledge-mcp"
+    version = "0.1.0"
+
     def __init__(self):
+        super().__init__()
         self.tracer: Tracer = get_tracer()  # ★ 日志追踪器
 
         self.tools = {
@@ -187,20 +191,11 @@ class KnowledgeMCPServer:
         }
 
     # ------------------------------------------------------------------
-    # MCP 请求处理
+    # 核心方法
     # ------------------------------------------------------------------
 
-    def handle_request(self, method: str, params: dict | None = None):
-        if method == "tools/list":
-            return [{"name": k, **v} for k, v in self.tools.items()]
-        elif method == "tools/call":
-            return self._call_tool(
-                params.get("name", ""),
-                params.get("arguments", {}),
-            )
-        return {"error": f"Unknown method: {method}"}
-
     def _call_tool(self, name: str, args: dict):
+        """基类要求的抽象方法 — 分派工具调用。"""
         handler = {
             "knowledge_index_codebase": self._index_codebase,
             "knowledge_search": self._search,
@@ -210,29 +205,19 @@ class KnowledgeMCPServer:
 
         if handler:
             try:
-                start = time.perf_counter()  # ★ 计时
-                self.tracer.debug(f"knowledge.{name}.start", detail=args)  # ★ 日志
+                start = time.perf_counter()
+                self.tracer.debug(f"knowledge.{name}.start", detail=args)
                 result = handler(**args)
                 elapsed = time.perf_counter() - start
                 self.tracer.info(f"knowledge.{name}", duration=elapsed, ok=True)
-                return {
-                    "content": [
-                        {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
-                    ]
-                }
+                return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
             except Exception as e:
                 self.tracer.error(f"knowledge.{name}", detail=str(e))
-                return {
-                    "content": [{"type": "text", "text": f"Error: {e}"}],
-                    "isError": True,
-                }
-        return {
-            "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
-            "isError": True,
-        }
+                return {"content": [{"type": "text", "text": f"Error: {e}"}], "isError": True}
+        return {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}
 
     # ------------------------------------------------------------------
-    # 核心方法
+    # 内部方法
     # ------------------------------------------------------------------
 
     def _index_codebase(
@@ -583,65 +568,6 @@ class KnowledgeMCPServer:
         return LANGUAGE_EXTENSIONS.get(ext, "other")
 
 
-# =============================================================================
-# stdio JSON-RPC 入口
-# =============================================================================
-
-def main():
-    """
-    stdio JSON-RPC 入口 — 接收 stdin 的 JSON-RPC 请求并响应。
-
-    协议：每行一个 JSON 对象（newline-delimited JSON）。
-    支持 initialize、notifications/initialized、tools/list、tools/call。
-    """
-    server = KnowledgeMCPServer()
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-            req_id = request.get("id")
-
-            method = request.get("method", "")
-
-            if method == "initialize":
-                # ── MCP 握手 ──
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "serverInfo": {
-                            "name": "knowledge-mcp",
-                            "version": "0.1.0",
-                        },
-                        "capabilities": {"tools": {}},
-                    },
-                }
-
-            elif method == "notifications/initialized":
-                continue  # 不需要响应
-
-            else:
-                result = server.handle_request(method, request.get("params", {}))
-                response = {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
-
-        except json.JSONDecodeError:
-            continue
-        except Exception as e:
-            error_response = {
-                "jsonrpc": "2.0",
-                "id": req_id if "req_id" in dir() else None,
-                "error": {"code": -32603, "message": str(e)},
-            }
-            sys.stdout.write(json.dumps(error_response) + "\n")
-            sys.stdout.flush()
-
 
 if __name__ == "__main__":
-    main()
+    KnowledgeMCPServer().run_stdio()

@@ -493,23 +493,57 @@ class Orchestrator:
         [030] 检索上下文 — 用 LLM 初步分析需求。
 
         将需求前 500 字符发送给 LLM，获取初步理解。
-        v0.1 简化：不做完整的 RAG 检索。
-        v0.2 计划：Knowledge MCP 三层检索。
+        结果存入 run_state.transcript 供 UNDERSTAND_REQUIREMENT 使用。
 
-        日志：记录 LLM 调用详情
+        v0.2 计划：Knowledge MCP 三层检索。
         """
         self.tracer.debug("state.retrieve_context", step="030",
                           detail={"input_chars": min(500, len(self.run_state.requirement))})
-        _ = self.llm.chat_with_system(f"分析需求: {self.run_state.requirement[:500]}")
+        resp = self.llm.chat_with_system(
+            f"分析以下需求，提取：1)目标模块 2)涉及的数据模型 3)需要的接口变更 4)风险点:\n{self.run_state.requirement[:500]}"
+        )
+        context = self.llm.extract_content(resp)
+        self.run_state.transcript.append({
+            "state": "RETRIEVE_CONTEXT",
+            "context": context,
+            "ts": datetime.now().isoformat()
+        })
+        self.tracer.debug("state.retrieve_context", step="030",
+                          detail={"output_chars": len(context)})
 
     def _handle_understand_requirement(self):
         """
-        [040] 理解需求 — 占位。
+        [040] 理解需求 — 基于检索的上下文做结构化理解。
 
-        v0.1：不在此处做额外处理，理解结果已在 RETRIEVE_CONTEXT 中获取。
-        v0.2 计划：结构化需求解析（提取模块、接口、数据模型变更）。
+        从 transcript 中读取 RETRIEVE_CONTEXT 的 LLM 分析结果，
+        用 LLM 二次提取为结构化 JSON（模块、数据模型、接口、风险）。
+
+        输出存入 transcript 供后续状态使用。
         """
-        pass
+        # 获取上一步的上下文
+        context_text = ""
+        for entry in reversed(self.run_state.transcript):
+            if entry.get("state") == "RETRIEVE_CONTEXT":
+                context_text = entry.get("context", "")
+                break
+
+        if not context_text:
+            self.tracer.debug("state.understand_requirement", step="040",
+                              detail="无上下文，跳过")
+            return
+
+        self.tracer.debug("state.understand_requirement.start", step="040")
+        resp = self.llm.chat_with_system(
+            f"基于以下需求分析，输出结构化JSON（modules/data_models/api_changes/risks）:\n{context_text}\n\n需求原文:\n{self.run_state.requirement[:300]}"
+        )
+        understanding = self.llm.extract_content(resp)
+        self.run_state.transcript.append({
+            "state": "UNDERSTAND_REQUIREMENT",
+            "understanding": understanding,
+            "ts": datetime.now().isoformat()
+        })
+        self.tracer.info("state.understand_requirement", step="040",
+                         detail={"output_chars": len(understanding)})
 
     def _handle_clarification_gate(self):
         """
@@ -610,9 +644,8 @@ class Orchestrator:
         branch = prefix + slug
 
         # ★ 分支命名校验（方案 v4 §8.3）
-        import re as _re
         naming = self.config.git.branch_naming
-        if not _re.match(naming.regex, branch):
+        if not re.match(naming.regex, branch):
             raise RuntimeError(
                 f"分支名不符合规范: {branch}\n"
                 f"  要求匹配: {naming.regex}"
