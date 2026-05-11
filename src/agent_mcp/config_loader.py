@@ -159,7 +159,7 @@ class ProjectConfig(BaseModel):
 
     name: str = "neiWangAgent"
     default_branch: str = "main"
-    code_platform: str = "github"
+    code_platform: str = "internal_custom"  # ★ P2-11: 默认企业内网
     # ★ 新增：项目类型（决定源码路径、ORM、deny_paths 等默认值）
     project_type: ProjectType = ProjectType.GENERIC
 
@@ -170,14 +170,24 @@ class ProjectConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
-    """``runtime:`` section — LLM 和 MCP 运行时参数。"""
+    """``runtime:`` section — LLM 和 MCP 运行时参数。
+
+    ★ P2-11: 默认值改为企业内网环境变量模式
+      - llm_base_url 默认读取 LLM_BASE_URL 环境变量
+      - llm_model 默认读取 LLM_MODEL 环境变量
+      - llm_api_key_env 指定 API Key 环境变量名（默认 LLM_API_KEY）
+    """
 
     mode: str = "local_mcp"
     transport: str = "stdio"
     llm_timeout_seconds: int = Field(default=120, ge=1)
     mcp_timeout_seconds: int = Field(default=30, ge=1)
-    llm_base_url: str = "https://api.deepseek.com/v1"
-    llm_model: str = "deepseek-v4-flash"
+    # ★ P2-11: 默认走环境变量而非硬编码 DeepSeek
+    llm_base_url: str = "${LLM_BASE_URL}"
+    llm_model: str = "${LLM_MODEL}"
+    # ★ P2-11: API Key 环境变量名（可配置为 LLM_API_KEY / DEEPSEEK_API_KEY 等）
+    llm_api_key_env: str = "LLM_API_KEY"
+    llm_base_url_env: str = "LLM_BASE_URL"
     # ★ 新增：并发控制
     max_concurrent_mcp_calls: int = Field(default=5, ge=1)
     max_retries: int = Field(default=3, ge=0)
@@ -447,7 +457,7 @@ class ChangePolicyConfig(BaseModel):
 class MRConfig(BaseModel):
     """★ 新增：``mr:`` section。"""
 
-    provider: str = "github"  # github | internal_mcp
+    provider: str = "internal_mcp"  # ★ P2-11: 默认企业内网 | github | mock
     target_branch: str = "main"
     title_template: str = "[Agent] {task_title}"
     description_template: str = ".agent/templates/mr_description.md"

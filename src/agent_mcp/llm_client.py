@@ -83,13 +83,17 @@ class LLMClient:
         self.model: str = config.runtime.llm_model
         self.timeout: int = config.runtime.llm_timeout_seconds
 
-        # ── API Key ──
-        # 从环境变量 DEEPSEEK_API_KEY 读取
-        # 不硬编码，避免泄露
-        self.api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
+        # ★ P2-12: 通用 API Key — 从配置的 env 变量名读取（默认 LLM_API_KEY）
+        # 向后兼容：如果环境变量未设置，fallback 到 DEEPSEEK_API_KEY
+        api_key_env = getattr(config.runtime, 'llm_api_key_env', 'LLM_API_KEY')
+        self.api_key: str = (
+            os.environ.get(api_key_env, "")
+            or os.environ.get("DEEPSEEK_API_KEY", "")  # 向后兼容
+            or os.environ.get("OPENAI_API_KEY", "")     # 通用兼容
+        )
         if not self.api_key:
             logger.warning(
-                "DEEPSEEK_API_KEY is not set — API calls will fail with 401/403."
+                f"{api_key_env} is not set — API calls will fail with 401/403."
             )
 
         # ★ 日志追踪器
