@@ -31,6 +31,7 @@ from typing import Any, Callable
 from agent_mcp.config_loader import AppConfig
 from agent_mcp.llm_client import LLMClient
 from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
+from agent_mcp.code_parser import parse_code_changes  # ★ 健壮代码解析
 
 logger = logging.getLogger(__name__)
 
@@ -262,54 +263,87 @@ class Orchestrator:
 
     def run(self, requirement_text: str) -> dict:
         """
-        从 INIT 到 DONE 的完整流程。
+        从 INIT 到 DONE 的完整流程（★ 带错误恢复）。
 
         参数：
             requirement_text: 需求描述文本（Markdown/纯文本均可）
 
         返回：
-            dict: 运行状态字典，包含 run_id、状态、文件变更等
+            dict: 运行状态字典
 
-        异常：
-            RuntimeError: Git 操作失败时抛出
-            httpx.HTTPError: LLM API 调用失败时抛出
-
-        日志追踪：
-            每条日志自动携带 run_id，方便 grep 定位单次运行
+        ★ 错误恢复策略：
+          - 每个状态最多重试 max_retries 次（默认3次）
+          - 重试间隔指数退避（1s → 2s → 4s）
+          - 超过重试次数后降级：跳过当前状态，记录错误，继续下一状态
+          - CLARIFICATION_GATE 和 ASK_HUMAN 不重试（需要人工介入）
         """
-        # ── 生成运行 ID ──
+        import time as _time
+
         run_id = f"{date.today().strftime('%Y%m%d')}-{datetime.now().strftime('%H%M%S')}"
         self.run_state = RunState(run_id, requirement_text)
         self._ensure_run_dir()
 
-        # ★ 设置追踪上下文（后续所有日志自动带 run_id）
         self.tracer.set_run_id(run_id)
         self.tracer.info("agent.run.start", step="000", detail=requirement_text[:200])
-
         print(f"\n🚀 Agent 运行 [{run_id}]")
         print(f"📋 {requirement_text[:100]}...\n")
 
+        max_retries = getattr(self.config.runtime, 'max_retries', 3)
+        # 不需要重试的状态（需要人工介入或幂等操作）
+        no_retry_states = {State.CLARIFICATION_GATE, State.ASK_HUMAN, State.DONE}
+
         try:
-            # ── 状态机主循环 ──
             while self.run_state.current_state != State.DONE:
                 state = self.run_state.current_state
                 name = STATE_NAMES.get(state, state)
-                step_code = state  # 三位数状态码，用于日志追踪
+                step_code = state
 
-                # ── 保存当前状态快照 ──
                 self._save_state()
 
-                # ── 执行状态处理器（★ 带日志 span） ──
                 handler = self._handlers.get(state)
                 if handler:
-                    with self.tracer.span(f"state.{name}", step=step_code):
-                        result = handler()
-                        if result == "PAUSE":
-                            # 需要人工介入，暂停状态机
-                            self.run_state.status = "paused"
-                            self._save_state()
-                            self.tracer.info("agent.run.paused", step=step_code)
-                            return self.run_state.to_dict()
+                    # ★ 带重试的状态执行
+                    success = False
+                    last_error = None
+                    retries = 0 if state in no_retry_states else max_retries
+
+                    for attempt in range(retries + 1):
+                        try:
+                            with self.tracer.span(f"state.{name}", step=step_code):
+                                result = handler()
+                                if result == "PAUSE":
+                                    self.run_state.status = "paused"
+                                    self._save_state()
+                                    self.tracer.info("agent.run.paused", step=step_code)
+                                    return self.run_state.to_dict()
+                            success = True
+                            break
+                        except Exception as e:
+                            last_error = e
+                            if attempt < retries:
+                                wait = 2 ** attempt  # 指数退避：1s, 2s, 4s
+                                self.tracer.warning(
+                                    f"state.{name}.retry",
+                                    step=step_code,
+                                    detail={"attempt": attempt + 1, "wait": wait, "error": str(e)[:200]}
+                                )
+                                print(f"    ⏳ 重试 {attempt + 1}/{retries} ({wait}s后)...")
+                                _time.sleep(wait)
+                            else:
+                                self.tracer.error(
+                                    f"state.{name}.failed",
+                                    step=step_code,
+                                    detail={"retries_exhausted": True, "error": str(e)[:200]}
+                                )
+
+                    if not success and last_error:
+                        # ── ★ 降级处理：记录错误，跳过当前状态 ──
+                        self.run_state.errors.append(
+                            f"[{state}] {name}: {last_error}"
+                        )
+                        print(f"    ⚠️ [{state}] {name} 失败（已重试{retries}次），降级跳过")
+                        self.tracer.warning("agent.run.degraded", step=step_code,
+                                            detail=f"跳过 {name}: {last_error}")
 
                 # ── 状态自动转换 ──
                 next_state = TRANSITIONS.get(state)
@@ -318,14 +352,12 @@ class Orchestrator:
                 elif state == State.DONE:
                     break
                 elif state == State.WAITING_CLARIFICATION:
-                    # 等待人类回复，暂停
                     self.run_state.status = "paused"
                     self._save_state()
                     self.tracer.info("agent.run.waiting_clarification", step=step_code)
                     return self.run_state.to_dict()
 
         except Exception as e:
-            # ★ 记录异常到追踪日志
             self.tracer.error("agent.run.error", step=self.run_state.current_state, detail=str(e))
             logger.exception(f"运行异常: {e}")
             self.run_state.errors.append(str(e))
@@ -333,7 +365,6 @@ class Orchestrator:
             self._save_state()
             raise
 
-        # ── 完成 ──
         self.run_state.status = "completed"
         self._save_state()
         self.tracer.info("agent.run.done", step="200", detail=self.run_state.mr_url)
@@ -675,57 +706,68 @@ class Orchestrator:
         [120] 修改代码 — LLM 生成代码变更并写入文件。
 
         流程：
-          1. 将需求和计划发送给 LLM
-          2. LLM 返回 @@FILE:path@@ ... 格式的代码块
-          3. 解析代码块，写入文件
-          4. 记录变更文件列表
+          1. 将需求和计划发送给 LLM（提示使用 @@FILE:path@@ ... @@END@@ 格式）
+          2. 用 code_parser 自动检测 LLM 输出格式（支持6种格式）
+          3. 安全边界检查，跳过 deny_paths
+          4. 写入文件，记录变更
 
-        LLM 输出格式要求：
-            @@FILE:README.md@@
-            修改后的完整内容...
-            @@FILE:src/main.py@@
-            修改后的完整内容...
-
-        日志：记录 LLM 调用和文件变更列表
+        ★ 健壮性：
+          - LLM 输出任何支持的格式都能解析
+          - 所有格式失败时记录错误并降级
         """
         self.tracer.debug("state.implement.start", step="120")
         print("    ✏️ 生成代码修改...")
 
+        # ── 增强的 prompt：要求 LLM 使用标准格式 ──
         changes = self.llm.chat_with_system(
-            f"根据需求生成代码修改。对每个文件用 @@FILE:path@@ 标记后跟完整内容:\n{self.run_state.requirement}"
+            f"根据需求生成代码修改。对每个修改的文件，使用以下格式：\n"
+            f"  @@FILE:相对路径@@\n"
+            f"  完整的新文件内容\n"
+            f"  @@END@@\n\n"
+            f"需求:\n{self.run_state.requirement}"
         )
         content = self.llm.extract_content(changes)
 
-        # ── 解析 LLM 返回的文件块 ──
-        file_blocks = re.split(r"@@FILE:(.+?)@@", content)
-        blocked: list[str] = []  # ★ 安全拦截记录
-        for i in range(1, len(file_blocks), 2):
-            if i + 1 < len(file_blocks):
-                fpath = file_blocks[i].strip()         # 文件路径
-                code = file_blocks[i + 1].strip()      # 文件内容
-                if fpath and code:
-                    # ★ 安全边界检查：拒绝修改禁止路径（方案 v4 §9.2）
-                    if self.config.is_path_denied(fpath):
-                        blocked.append(fpath)
-                        self.tracer.warning("state.implement.blocked", step="120",
-                                            detail={"path": fpath, "reason": "deny_paths"})
-                        continue  # 跳过禁止路径
+        # ── ★ 使用健壮解析器（自动检测6种格式） ──
+        parsed = parse_code_changes(content)
 
-                    pf = Path(fpath)
-                    pf.parent.mkdir(parents=True, exist_ok=True)
-                    pf.write_text(code, encoding="utf-8")
-                    self.run_state.files_changed.append(fpath)
-                    # ── 计算行数（估算） ──
-                    self.run_state.lines_changed += len(code.splitlines())
+        if not parsed.success:
+            # ── 所有格式都失败了 ──
+            self.tracer.warning("state.implement.parse_failed", step="120",
+                                detail={"errors": parsed.errors,
+                                        "raw_len": len(content)})
+            print(f"    ⚠️ LLM输出格式无法解析 ({parsed.used_format})")
+            print(f"    原始输出(前200字符): {content[:200]}")
+            return  # 不抛异常，允许后续状态继续（降级处理）
+
+        # ── 写入文件 ──
+        blocked: list[str] = []
+        for cf in parsed.files:
+            fpath = cf.path
+            # ★ 安全边界检查
+            if self.config.is_path_denied(fpath):
+                blocked.append(fpath)
+                self.tracer.warning("state.implement.blocked", step="120",
+                                    detail={"path": fpath, "reason": "deny_paths"})
+                continue
+
+            pf = Path(fpath)
+            pf.parent.mkdir(parents=True, exist_ok=True)
+            pf.write_text(cf.content, encoding="utf-8")
+            self.run_state.files_changed.append(fpath)
+            self.run_state.lines_changed += cf.line_count
 
         if blocked:
             print(f"    ⚠️ 已拦截 {len(blocked)} 个禁止文件: {', '.join(blocked)}")
 
         file_count = len(self.run_state.files_changed)
         self.tracer.info("state.implement", step="120",
-                         detail={"files": file_count, "lines": self.run_state.lines_changed,
+                         detail={"files": file_count,
+                                 "lines": self.run_state.lines_changed,
+                                 "format": parsed.used_format,
                                  "paths": self.run_state.files_changed})
-        print(f"    ✅ {file_count} 文件, ~{self.run_state.lines_changed} 行")
+        print(f"    ✅ {file_count} 文件, ~{self.run_state.lines_changed} 行 "
+              f"(格式: {parsed.used_format})")
 
     def _handle_change_scope_guard(self):
         """
