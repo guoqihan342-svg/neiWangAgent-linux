@@ -60,6 +60,7 @@ class State:
     PLAN_IMPLEMENTATION = "100"
     CREATE_BRANCH = "110"
     IMPLEMENT = "120"
+    SELF_REVIEW = "122"  # ★ P6-30: 提交前自审
     CHANGE_SCOPE_GUARD = "125"
     DATABASE_IMPACT_DETECT = "130"
     GENERATE_DB_IMPACT_REPORT = "135"
@@ -76,6 +77,7 @@ class State:
 CRITICAL_STATES = {
     State.CREATE_BRANCH,
     State.IMPLEMENT,
+    State.SELF_REVIEW,  # ★ P6-30: 自审失败应阻止提交
     State.CHANGE_SCOPE_GUARD,
     State.PREPARE_COMMIT,
     State.COMMIT,
@@ -112,7 +114,8 @@ TRANSITIONS: dict[str, str | None] = {
     State.RESUME_WITH_ANSWER: State.RETRIEVE_CONTEXT,
     State.PLAN_IMPLEMENTATION: State.CREATE_BRANCH,
     State.CREATE_BRANCH: State.IMPLEMENT,
-    State.IMPLEMENT: State.CHANGE_SCOPE_GUARD,
+    State.IMPLEMENT: State.SELF_REVIEW,  # ★ P6-30
+    State.SELF_REVIEW: State.CHANGE_SCOPE_GUARD,
     State.CHANGE_SCOPE_GUARD: State.DATABASE_IMPACT_DETECT,
     State.DATABASE_IMPACT_DETECT: State.PREPARE_COMMIT,
     State.GENERATE_DB_IMPACT_REPORT: State.PREPARE_COMMIT,
@@ -139,6 +142,7 @@ STATE_NAMES: dict[str, str] = {
     State.PLAN_IMPLEMENTATION: "生成实施计划",
     State.CREATE_BRANCH: "创建分支",
     State.IMPLEMENT: "修改代码",
+    State.SELF_REVIEW: "自审变更",  # ★ P6-30
     State.CHANGE_SCOPE_GUARD: "变更范围检查",
     State.DATABASE_IMPACT_DETECT: "数据库影响检测",
     State.GENERATE_DB_IMPACT_REPORT: "生成影响报告",
@@ -197,11 +201,12 @@ class RunState:
 class Orchestrator:
     """核心编排器"""
 
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, dry_run: bool = False):
         self.config = config
         self.llm = LLMClient(config)
         self.run_state: RunState | None = None
         self.tracer: Tracer = get_tracer()
+        self.dry_run = dry_run  # ★ P6-32: dry-run 模式不写文件不推送
         # ★ P1-6: 实例化 MCP Server（直接模式，不走 stdio 子进程）
         self._git_mcp = GitMCPServer()
         self._mr_mcp = MRMCPServer()
@@ -219,6 +224,7 @@ class Orchestrator:
             State.PLAN_IMPLEMENTATION: self._handle_plan_implementation,
             State.CREATE_BRANCH: self._handle_create_branch,
             State.IMPLEMENT: self._handle_implement,
+            State.SELF_REVIEW: self._handle_self_review,  # ★ P6-30
             State.CHANGE_SCOPE_GUARD: self._handle_change_scope_guard,
             State.DATABASE_IMPACT_DETECT: self._handle_database_impact_detect,
             State.PREPARE_COMMIT: self._handle_prepare_commit,
@@ -271,24 +277,78 @@ class Orchestrator:
         return self._drive_state_machine()
 
     def resume(self, run_id: str) -> dict:
-        """★ P0-4: 从保存的状态恢复，不创建新run_id。"""
+        """★ P0-4: 从保存的状态恢复，不创建新run_id。
+
+        ★ P6-31: 如果恢复状态是 WAITING_CLARIFICATION，自动加载答案。
+        """
         state_path = Path(f".agent/runs/{run_id}/state.json")
         if not state_path.exists():
             raise FileNotFoundError(f"状态不存在: {state_path}")
 
         data = json.loads(state_path.read_text())
         self.run_state = RunState.from_dict(data)
-        self.tracer.set_run_id(run_id)  # ★ 复用旧run_id
+        self.tracer.set_run_id(run_id)
 
         if self.run_state.status == "completed":
             self.tracer.info("agent.resume.already_done", detail=run_id)
             print(f"✅ [{run_id}] 已完成")
             return self.run_state.to_dict()
 
+        # ★ P6-31: 如果暂停在等待澄清，自动加载答案
+        if self.run_state.current_state in (State.WAITING_CLARIFICATION, State.ASK_HUMAN):
+            answers = self._load_clarification_answers(run_id)
+            if answers:
+                # 加载答案到 transcript，然后跳转到 RESUME_WITH_ANSWER
+                self.run_state.transcript.append({
+                    "state": "RESUME_WITH_ANSWER",
+                    "answers": answers,
+                    "ts": datetime.now().isoformat(),
+                })
+                self.run_state.current_state = State.RESUME_WITH_ANSWER
+                self.tracer.info("agent.resume.answers_loaded",
+                                 detail={"count": len(answers)})
+                print(f"    📋 已加载 {len(answers)} 条澄清回复")
+            else:
+                self.tracer.info("agent.resume.no_answers", detail=run_id)
+                print(f"    ⚠️ 未找到澄清回复，继续等待")
+
         self.tracer.info("agent.resume", step=self.run_state.current_state,
                           detail=f"从 {STATE_NAMES.get(self.run_state.current_state)} 恢复")
         print(f"\n🔄 恢复 [{run_id}] @ {STATE_NAMES.get(self.run_state.current_state)}")
         return self._drive_state_machine()
+
+    @staticmethod
+    def _load_clarification_answers(run_id: str) -> list[str]:
+        """
+        ★ P6-31: 从 clarification 文件加载答案。
+
+        优先级：answers.json > clarification.json > answers.md
+        """
+        cdir = Path(f".agent/runs/{run_id}/clarification")
+
+        # 优先读 answers.json
+        json_path = cdir / "answers.json"
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                ans = data.get("answers", [])
+                if isinstance(ans, list) and ans:
+                    return [a.get("answer", str(a)) if isinstance(a, dict) else str(a) for a in ans]
+            except Exception:
+                pass
+
+        # Fallback 到旧格式
+        old_path = Path(f".agent/runs/{run_id}/clarification.json")
+        if old_path.exists():
+            try:
+                data = json.loads(old_path.read_text(encoding="utf-8"))
+                ans = data.get("answers", [])
+                if ans:
+                    return ans
+            except Exception:
+                pass
+
+        return []
 
     def _drive_state_machine(self) -> dict:
         """
@@ -715,6 +775,13 @@ class Orchestrator:
                                     detail={"path": fpath, "reason": "deny_paths"})
                 continue
 
+            # ★ P6-32: dry-run 跳过实际写入
+            if self.dry_run:
+                print(f"    🔍 [dry-run] 将写入: {fpath} ({cf.line_count} 行)")
+                self.run_state.files_changed.append(fpath)
+                self.run_state.lines_changed += cf.line_count
+                continue
+
             pf = Path(fpath)
             pf.parent.mkdir(parents=True, exist_ok=True)
             pf.write_text(cf.content, encoding="utf-8")
@@ -732,6 +799,79 @@ class Orchestrator:
                                  "paths": self.run_state.files_changed})
         print(f"    ✅ {file_count} 文件, ~{self.run_state.lines_changed} 行 "
               f"(格式: {parsed.used_format})")
+
+    def _handle_self_review(self):
+        """
+        [122] 自审变更 — LLM 审查自己的代码修改。
+
+        ★ P6-30: 提交前自审，检测语法错误/缺失导入/逻辑/安全问题。
+
+        仅当 task.enable_self_review=true 时执行。
+        自审通过 → 继续；发现问题 → 记录warning但继续（不阻断）。
+        """
+        if not self.config.task.enable_self_review:
+            print("    ⏭️ 自审已禁用（task.enable_self_review=false）")
+            return
+
+        files = self.run_state.files_changed
+        if not files:
+            print("    ℹ️ 无变更文件，跳过自审")
+            return
+
+        self.tracer.debug("state.self_review.start", step="122",
+                          detail={"files": len(files)})
+        print(f"    🔍 自审 {len(files)} 个文件...")
+
+        # ── 收集变更内容 ──
+        review_input_parts = []
+        for fpath in files[:5]:  # 最多审查5个文件
+            try:
+                content = Path(fpath).read_text(encoding="utf-8", errors="ignore")
+                # 只取前100行
+                lines = content.splitlines()[:100]
+                review_input_parts.append(f"### {fpath}\n```\n" + "\n".join(lines) + "\n```")
+            except Exception:
+                pass
+
+        if not review_input_parts:
+            return
+
+        review_input = "\n\n".join(review_input_parts)
+
+        # ── LLM 自审 ──
+        try:
+            resp = self.llm.chat_with_system(
+                f"审查以下代码变更，检查：\n"
+                f"1. 语法错误（拼写、缩进、括号匹配）\n"
+                f"2. 缺失的 import/依赖\n"
+                f"3. 逻辑错误（空指针、类型不匹配、边界条件）\n"
+                f"4. 安全问题（SQL注入、硬编码密钥、路径遍历）\n"
+                f"5. 是否满足需求：{self.run_state.requirement[:200]}\n\n"
+                f"如果没问题回复 PASS，有问题逐条列出。\n\n"
+                f"{review_input}"
+            )
+            review_text = self.llm.extract_content(resp)
+
+            is_pass = "PASS" in review_text.upper() and "ISSUE" not in review_text.upper()
+            self.run_state.transcript.append({
+                "state": "SELF_REVIEW",
+                "result": "PASS" if is_pass else "ISSUES_FOUND",
+                "review": review_text,
+                "ts": datetime.now().isoformat(),
+            })
+
+            if is_pass:
+                self.tracer.info("state.self_review", step="122", detail="PASS")
+                print(f"    ✅ 自审通过")
+            else:
+                self.tracer.warning("state.self_review", step="122",
+                                    detail=f"issues found: {review_text[:200]}")
+                print(f"    ⚠️ 自审发现问题:\n{review_text[:300]}")
+
+        except Exception as e:
+            self.tracer.warning("state.self_review", step="122",
+                                detail=f"LLM自审失败: {e}")
+            print(f"    ⚠️ 自审跳过（LLM调用失败: {e}）")
 
     def _handle_change_scope_guard(self):
         """
@@ -814,14 +954,17 @@ class Orchestrator:
         """
         [160] 执行 Git Commit — 通过 Git MCP Server。
 
-        ★ P1-6: 使用 git_commit MCP 工具（替代直接 subprocess）。
-        ★ P1-10 联动: files 参数必须显式传入。
-
-        日志：记录 commit SHA、文件列表和消息
+        ★ P6-32: dry-run 模式跳过实际提交。
         """
         files = self.run_state.files_changed
         if not files:
             raise RuntimeError("没有文件需要提交")
+
+        if self.dry_run:
+            msg = f"feat: {self.run_state.requirement[:80]}"
+            self.run_state.commit_hash = "dry-run-sha"
+            print(f"    🔍 [dry-run] 将提交: {len(files)} 文件, msg={msg[:50]}")
+            return
 
         self.tracer.debug("state.commit.start", step="160",
                           detail={"files": files})
