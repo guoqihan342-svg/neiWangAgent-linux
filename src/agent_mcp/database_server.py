@@ -609,13 +609,44 @@ class DatabaseMCPServer(BaseMCPServer):
         return list(set(related))
 
     def _generate_draft(self, description: str = "") -> dict:
-        """生成 migration 草稿（不执行）。"""
+        """
+        ★ P5-29: LLM 驱动的 migration 草稿生成。
+
+        基于数据库影响检测结果，生成 SQL migration 草稿。
+        v0.1.8: 返回模板化草稿 + 影响分析上下文。
+        """
+        # ── 加载 DDL 索引提供上下文 ──
+        ddl_tables = self._load_ddl_tables()
+        table_summary = "\n".join(
+            f"  - {name}: {len(info.get('columns', []))} columns"
+            for name, info in list(ddl_tables.items())[:10]
+        ) if ddl_tables else "  (DDL 索引为空，请先运行 database_index_ddl)"
+
         draft = (
-            f"-- Migration draft (v0.1.5)\n"
+            f"-- ============================================================\n"
+            f"-- Migration Draft — neiWangAgent v0.1.8\n"
             f"-- Description: {description}\n"
+            f"-- Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"-- ⚠️ 此文件由 Agent 生成草稿，请人工审核后执行\n"
+            f"-- ============================================================\n\n"
+            f"-- 当前数据库表概览:\n{table_summary}\n\n"
+            f"-- TODO: 根据需求变更填充具体 DDL 语句\n"
+            f"-- 示例:\n"
+            f"-- ALTER TABLE xxx ADD COLUMN yyy TYPE;\n"
+            f"-- CREATE INDEX idx_xxx ON xxx (yyy);\n\n"
+            f"-- ============================================================\n"
+            f"-- 安全检查清单（执行前确认）:\n"
+            f"-- [ ] 已在测试环境验证\n"
+            f"-- [ ] 已备份相关表\n"
+            f"-- [ ] 无破坏性操作（DROP/TRUNCATE）\n"
+            f"-- [ ] DBA 已 Review\n"
+            f"-- ============================================================\n"
         )
-        return {"draft": draft, "warning": "⚠️ 此 SQL 不会被执行，需 DBA review 后人工执行"}
+        return {
+            "draft": draft,
+            "warning": "⚠️ 此 SQL 不会被执行，需 DBA review 后人工执行",
+            "table_count": len(ddl_tables),
+        }
 
 
 if __name__ == "__main__":
