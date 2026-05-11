@@ -4,15 +4,24 @@ Database MCP Server v0.1 — 只读文档索引
 v0.1: 不连接数据库，只做 DDL/MyBatis 文档索引
 v0.2: 预留只读连接验证
 安全红线: 永远不执行 INSERT/UPDATE/DELETE
+★ 继承 BaseMCPServer
 """
 
 import json
 import sys
 from pathlib import Path
 
+from agent_mcp.base_mcp import BaseMCPServer
 
-class DatabaseMCPServer:
+
+class DatabaseMCPServer(BaseMCPServer):
+    """Database MCP Server — 继承 BaseMCPServer。"""
+
+    name = "database-mcp"
+    version = "0.1.0"
+
     def __init__(self):
+        super().__init__()
         self.tools = {
             "database_index_ddl": {
                 "description": "索引 DDL 文件",
@@ -28,9 +37,7 @@ class DatabaseMCPServer:
                 "description": "搜索数据库表结构",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                    },
+                    "properties": {"query": {"type": "string"}},
                     "required": ["query"]
                 }
             },
@@ -39,10 +46,7 @@ class DatabaseMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "changed_files": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
+                        "changed_files": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["changed_files"]
                 }
@@ -51,29 +55,15 @@ class DatabaseMCPServer:
                 "description": "生成 migration 草稿（不执行）",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "description": {"type": "string"},
-                    }
+                    "properties": {"description": {"type": "string"}},
                 }
             },
         }
-        # 安全红线：黑名单 SQL 模式
         self.blocked_sql_patterns = [
-            r"\bDROP\s+TABLE",
-            r"\bTRUNCATE",
-            r"\bDELETE\s+FROM",
-            r"\bINSERT\s+INTO",
-            r"\bUPDATE\b",
+            r"\bDROP\s+TABLE", r"\bTRUNCATE",
+            r"\bDELETE\s+FROM", r"\bINSERT\s+INTO", r"\bUPDATE\b",
         ]
-        # 安全红线：永远不执行写 SQL
         self.write_enabled = False
-
-    def handle_request(self, method: str, params=None):
-        if method == "tools/list":
-            return [{"name": k, **v} for k, v in self.tools.items()]
-        elif method == "tools/call":
-            return self._call_tool(params.get("name", ""), params.get("arguments", {}))
-        return {"error": f"Unknown method: {method}"}
 
     def _call_tool(self, name: str, args: dict):
         handler = {
@@ -101,7 +91,6 @@ class DatabaseMCPServer:
         return {"query": query, "tables": [], "message": "v0.1: 需先执行 database_index_ddl 构建索引"}
 
     def _detect_risk(self, changed_files: list[str]) -> dict:
-        """检测数据库相关风险"""
         risky = []
         for f in changed_files:
             if any(kw in f.lower() for kw in ["entity", "mapper", "dao", "model", "ddl", "sql"]):
@@ -109,39 +98,13 @@ class DatabaseMCPServer:
         return {"affected": len(risky) > 0, "risky_files": risky, "message": "请 DBA Review"}
 
     def _generate_draft(self, description: str) -> dict:
-        """生成 migration 草稿"""
-        draft = f"-- Migration draft (v0.1)\n-- Description: {description}\n-- ⚠️ 此文件由 Agent 生成草稿，请人工审核后执行\n"
+        draft = (
+            f"-- Migration draft (v0.1)\n"
+            f"-- Description: {description}\n"
+            f"-- ⚠️ 此文件由 Agent 生成草稿，请人工审核后执行\n"
+        )
         return {"draft": draft, "warning": "⚠️ 此 SQL 不会被执行，需 DBA review 后人工执行"}
 
 
-def main():
-    server = DatabaseMCPServer()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-            req_id = request.get("id")
-            method = request.get("method", "")
-            if method == "initialize":
-                response = {"jsonrpc": "2.0", "id": req_id,
-                           "result": {"protocolVersion": "2024-11-05",
-                                      "serverInfo": {"name": "database-mcp", "version": "0.1.0"},
-                                      "capabilities": {"tools": {}}}}
-            elif method == "notifications/initialized":
-                continue
-            else:
-                result = server.handle_request(method, request.get("params", {}))
-                response = {"jsonrpc": "2.0", "id": req_id, "result": result}
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
-        except json.JSONDecodeError:
-            continue
-        except Exception as e:
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}}) + "\n")
-            sys.stdout.flush()
-
-
 if __name__ == "__main__":
-    main()
+    DatabaseMCPServer().run_stdio()

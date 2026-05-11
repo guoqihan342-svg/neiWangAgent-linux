@@ -657,35 +657,30 @@ class ConfigLoader:
 
     If ``config_path`` is omitted the loader walks up from ``src/agent_mcp/``
     to the project root (the directory that contains ``config.yaml``).
-    """
 
-    _cached_config: ClassVar[Optional[AppConfig]] = None
-    _cached_path: ClassVar[Optional[Path]] = None
+    ★ 每个实例独立缓存，避免不同项目配置文件互相污染。
+    """
 
     def __init__(self, config_path: str | Path | None = None) -> None:
         if config_path is not None:
             self._config_path = Path(config_path)
         else:
             self._config_path = PROJECT_ROOT / "config.yaml"
+        self._cached_config: Optional[AppConfig] = None  # ★ 实例级缓存
 
     @property
     def config_path(self) -> Path:
-        """Absolute path to the YAML file being read."""
         return self._config_path
 
     @property
     def config(self) -> AppConfig:
-        """Return the validated :class:`AppConfig` (lazy-loaded & cached)."""
-        if ConfigLoader._cached_config is None or ConfigLoader._cached_path != self._config_path:
-            ConfigLoader._cached_config = self._load()
-            ConfigLoader._cached_path = self._config_path
-        return ConfigLoader._cached_config
+        if self._cached_config is None:
+            self._cached_config = self._load()
+        return self._cached_config
 
     def reload(self) -> AppConfig:
-        """Force re-read and re-validate the YAML file."""
-        ConfigLoader._cached_config = self._load()
-        ConfigLoader._cached_path = self._config_path
-        return ConfigLoader._cached_config
+        self._cached_config = self._load()
+        return self._cached_config
 
     def _load(self) -> AppConfig:
         raw = self._read_yaml()

@@ -2,15 +2,24 @@
 Clarification MCP Server v0.1 — 澄清沟通
 
 职责：当需求不清晰时生成问题，支持人工回复后恢复执行
+★ 继承 BaseMCPServer
 """
 
 import json
 import sys
 from pathlib import Path
 
+from agent_mcp.base_mcp import BaseMCPServer
 
-class ClarificationMCPServer:
+
+class ClarificationMCPServer(BaseMCPServer):
+    """Clarification MCP Server — 继承 BaseMCPServer。"""
+
+    name = "clarification-mcp"
+    version = "0.1.0"
+
     def __init__(self):
+        super().__init__()
         self.tools = {
             "clarification_ask": {
                 "description": "向用户提问以澄清需求",
@@ -20,22 +29,20 @@ class ClarificationMCPServer:
                         "questions": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "需要澄清的问题列表"
+                            "description": "需要澄清的问题列表",
                         },
                         "run_id": {"type": "string", "description": "运行 ID"},
                     },
-                    "required": ["questions"]
-                }
+                    "required": ["questions"],
+                },
             },
             "clarification_get_answers": {
                 "description": "获取用户的回复",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "run_id": {"type": "string"},
-                    },
-                    "required": ["run_id"]
-                }
+                    "properties": {"run_id": {"type": "string"}},
+                    "required": ["run_id"],
+                },
             },
             "clarification_save_answers": {
                 "description": "保存用户回复",
@@ -45,17 +52,10 @@ class ClarificationMCPServer:
                         "run_id": {"type": "string"},
                         "answers": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["run_id", "answers"]
-                }
+                    "required": ["run_id", "answers"],
+                },
             },
         }
-
-    def handle_request(self, method: str, params=None):
-        if method == "tools/list":
-            return [{"name": k, **v} for k, v in self.tools.items()]
-        elif method == "tools/call":
-            return self._call_tool(params.get("name", ""), params.get("arguments", {}))
-        return {"error": f"Unknown method: {method}"}
 
     def _call_tool(self, name: str, args: dict):
         handler = {
@@ -100,34 +100,5 @@ class ClarificationMCPServer:
         return {"saved": True, "run_id": run_id}
 
 
-def main():
-    server = ClarificationMCPServer()
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-            req_id = request.get("id")
-            method = request.get("method", "")
-            if method == "initialize":
-                response = {"jsonrpc": "2.0", "id": req_id,
-                           "result": {"protocolVersion": "2024-11-05",
-                                      "serverInfo": {"name": "clarification-mcp", "version": "0.1.0"},
-                                      "capabilities": {"tools": {}}}}
-            elif method == "notifications/initialized":
-                continue
-            else:
-                result = server.handle_request(method, request.get("params", {}))
-                response = {"jsonrpc": "2.0", "id": req_id, "result": result}
-            sys.stdout.write(json.dumps(response) + "\n")
-            sys.stdout.flush()
-        except json.JSONDecodeError:
-            continue
-        except Exception as e:
-            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}}) + "\n")
-            sys.stdout.flush()
-
-
 if __name__ == "__main__":
-    main()
+    ClarificationMCPServer().run_stdio()
