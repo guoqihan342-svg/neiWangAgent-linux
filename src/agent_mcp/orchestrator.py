@@ -1065,15 +1065,100 @@ class Orchestrator:
 
     def _handle_done(self):
         """
-        [200] 完成 — 输出最终结果。
+        [200] 完成 — 输出最终结果 + 生成运维报告。
 
-        日志：记录完成状态和 MR URL
+        ★ P7-35: 生成 run report (report.md)
         """
         self.tracer.info("state.done", step="200",
                          detail={"mr_url": self.run_state.mr_url,
                                  "files": len(self.run_state.files_changed),
                                  "commit": self.run_state.commit_hash})
+        # ★ P7-35: 生成运维报告
+        self._gen_run_report()
         print(f"    🎉 MR: {self.run_state.mr_url}")
+
+    # ==================================================================
+    # ★ P7-35: Run Report 导出
+    # ==================================================================
+
+    def _gen_run_report(self) -> None:
+        """
+        生成运行报告 report.md。
+
+        内容：
+          - 运行概要（run_id, 需求, 时间, 耗时）
+          - 状态流程（每步状态 + 结果）
+          - 变更文件清单
+          - 自审结果
+          - MR 链接
+          - 错误/警告
+        """
+        report_path = Path(f".agent/runs/{self.run_state.run_id}/report.md")
+        lines = [
+            f"# neiWangAgent Run Report",
+            f"",
+            f"| 项目 | 值 |",
+            f"|------|-----|",
+            f"| Run ID | `{self.run_state.run_id}` |",
+            f"| 状态 | {self.run_state.status} |",
+            f"| 需求 | {self.run_state.requirement[:100]}... |",
+            f"| 创建时间 | {self.run_state.created_at} |",
+            f"| 报告时间 | {datetime.now().isoformat()} |",
+            f"| 分支 | `{self.run_state.branch_name}` |",
+            f"| Commit | `{self.run_state.commit_hash}` |",
+            f"| MR | {self.run_state.mr_url} |",
+            f"",
+            f"## 变更文件 ({len(self.run_state.files_changed)})",
+            f"",
+        ]
+        for f in self.run_state.files_changed:
+            lines.append(f"- `{f}`")
+        lines.append("")
+
+        # ── 自审结果 ──
+        self_review = "无"
+        for entry in self.run_state.transcript:
+            if entry.get("state") == "SELF_REVIEW":
+                self_review = entry.get("result", "?")
+                lines.append("## 自审结果")
+                lines.append(f"**{self_review}**")
+                lines.append("")
+                lines.append("```")
+                lines.append(entry.get("review", "")[:500])
+                lines.append("```")
+                break
+
+        # ── 状态流程 ──
+        lines.append("## 执行流程")
+        lines.append("| 状态 | 结果 |")
+        lines.append("|------|------|")
+        for entry in self.run_state.transcript:
+            state = entry.get("state", "?")
+            result = entry.get("result", "OK")
+            lines.append(f"| {state} | {result} |")
+
+        # ── 错误/警告 ──
+        if self.run_state.errors:
+            lines.append("")
+            lines.append("## 错误/警告")
+            for e in self.run_state.errors:
+                lines.append(f"- {e}")
+
+        # ── 数据库影响 ──
+        for entry in self.run_state.transcript:
+            if entry.get("state") == "DATABASE_IMPACT_DETECT" and entry.get("affected_tables"):
+                lines.append("")
+                lines.append("## 数据库影响")
+                for t in entry.get("affected_tables", []):
+                    lines.append(f"- 表 `{t}`")
+                break
+
+        lines.append("")
+        lines.append("---")
+        lines.append(f"> 由 neiWangAgent v0.1.9 自动生成 | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"    📊 报告: {report_path}")
 
     # ==================================================================
     # 辅助方法
@@ -1081,29 +1166,60 @@ class Orchestrator:
 
     def _gen_mr_desc(self) -> str:
         """
-        生成 MR 描述（Markdown 格式）。
+        ★ P7-38: 增强 MR 描述 — DB影响表 + 自审结果 + 未测试标记。
 
-        模板包含（方案 v4 §12.1）：
+        模板包含：
           - 已执行步骤清单（含勾选框）
           - 未执行步骤（单元测试等）
           - 变更文件列表
+          - 自审结果（如有）
+          - 数据库影响表（如有）
           - 需求原文
           - Reviewer 注意事项
-
-        返回：
-            str: Markdown 格式的 MR 描述
         """
         files = "\n".join(f"- `{f}`" for f in self.run_state.files_changed)
+
+        # ── 自审结果 ──
+        self_review_section = ""
+        for entry in self.run_state.transcript:
+            if entry.get("state") == "SELF_REVIEW":
+                result = entry.get("result", "?")
+                review = entry.get("review", "")
+                self_review_section = f"""
+### 自审结果: {result}
+{review[:300]}
+"""
+                break
+
+        # ── 数据库影响 ──
+        db_section = ""
+        for entry in self.run_state.transcript:
+            if entry.get("state") == "DATABASE_IMPACT_DETECT" and entry.get("affected_tables"):
+                tables = entry.get("affected_tables", [])
+                db_section = f"""
+### 数据库影响
+| 表名 |
+|------|
+""" + "\n".join(f"| `{t}` |" for t in sorted(tables)) + "\n"
+                break
+
+        # ── 错误记录 ──
+        errors_section = ""
+        if self.run_state.errors:
+            errors_section = "\n### 执行警告\n" + "\n".join(f"- {e}" for e in self.run_state.errors[:5])
+
         return f"""## Agent 自动生成 MR
 
 ### 执行情况
 - [x] 需求读取
 - [x] 上下文检索
 - [x] 代码修改
+- [x] 自审变更
 - [x] commit & push
 - [ ] 单元测试（未执行）
 - [ ] 人工 Review
 
+{self_review_section}{db_section}{errors_section}
 ### 变更文件
 {files}
 
@@ -1116,6 +1232,7 @@ class Orchestrator:
 3. 请评估是否需要补充测试
 
 > ⚠️ 此 MR 由 neiWangAgent 自动生成，请人工 Review 后合并
+> ℹ️ 未执行单元测试，请自行验证
 """
 
     def _ensure_run_dir(self):
@@ -1207,13 +1324,12 @@ class Orchestrator:
 
     def _check_knowledge_freshness(self) -> str:
         """
-        ★ P5-27: 检测知识库新鲜度。
+        ★ P5-27 / P7-39: 检测知识库新鲜度。
 
         检查项（方案 v4 §4.3）：
           - target_branch 是否有新提交
-          - 核心模块文件是否变更
-          - DDL 文件是否变更
-          - Mapper XML 是否变更
+          - 核心模块文件是否变更（mapper xml, ddl, pom.xml, package.json）
+          - 超过 24 小时的 hotspot 索引
         """
         kb_state = Path(".agent/knowledge/state.json")
         if not kb_state.exists():
@@ -1232,8 +1348,54 @@ class Orchestrator:
                 capture_output=True, text=True
             )
             if result.stdout.strip():
-                return f"检测到新提交，将增量更新"
+                # ★ P7-39: 检查是否核心文件变更
+                core_files = self._check_core_files_changed()
+                if core_files:
+                    return f"检测到核心文件变更: {', '.join(core_files[:3])}，将重建"
+                return "检测到新提交，将增量更新"
         except Exception:
             pass
 
-        return ""  # 知识库新鲜，不需要提示
+        # ★ P7-39: 检查 hotspot 是否过期（24h）
+        try:
+            prev_ts = datetime.fromisoformat(prev_at[:19])
+            age_hours = (datetime.now() - prev_ts).total_seconds() / 3600
+            if age_hours > 24:
+                return f"知识库已过期（{age_hours:.0f}h），将重建"
+        except Exception:
+            pass
+
+        return ""
+
+    def _check_core_files_changed(self) -> list[str]:
+        """
+        ★ P7-39: 检测核心文件是否在上次 warmup 后变更。
+
+        核心文件：mapper XML, DDL SQL, pom.xml, package.json, go.mod, pyproject.toml
+        """
+        kb_state = Path(".agent/knowledge/state.json")
+        try:
+            prev = json.loads(kb_state.read_text(encoding="utf-8"))
+            prev_at = prev.get("updated_at", "1970-01-01")[:19]
+        except Exception:
+            return ["unknown"]
+
+        core_patterns = [
+            "**/*Mapper.xml", "**/*.sql", "pom.xml", "package.json",
+            "go.mod", "pyproject.toml", "**/migration/**",
+        ]
+        from fnmatch import fnmatch
+        changed = []
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", f"--since={prev_at}", "HEAD"],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.strip().splitlines():
+                for pat in core_patterns:
+                    if fnmatch(line, pat):
+                        changed.append(line)
+                        break
+        except Exception:
+            pass
+        return list(set(changed))
