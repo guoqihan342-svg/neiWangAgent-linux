@@ -25,15 +25,15 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
-
-
 # ============================================================================
 # 项目类型枚举 — 支持多语言项目（方案 v4 扩展）
 # ============================================================================
@@ -56,8 +56,6 @@ class ProjectType(str, Enum):
     GO = "go"
     TYPESCRIPT = "typescript"
     GENERIC = "generic"
-
-
 # ============================================================================
 # 各语言默认配置 — deny_paths / 源码路径 / 构建工具
 # ============================================================================
@@ -125,8 +123,6 @@ LANGUAGE_DEFAULTS: dict[ProjectType, dict] = {
         ],
     },
 }
-
-
 # ============================================================================
 # Helper: discover the project root (where config.yaml lives)
 # ============================================================================
@@ -144,16 +140,10 @@ def _find_project_root() -> Path:
             return directory
 
     raise FileNotFoundError("config.yaml not found in any ancestor directory")
-
-
 PROJECT_ROOT: Path = _find_project_root()
-
-
 # ============================================================================
 # Pydantic models — one per YAML section
 # ============================================================================
-
-
 class ProjectConfig(BaseModel):
     """``project:`` section — 项目基本信息 + 语言类型。"""
 
@@ -167,8 +157,6 @@ class ProjectConfig(BaseModel):
     def lang_defaults(self) -> dict:
         """获取当前项目类型的默认配置。"""
         return LANGUAGE_DEFAULTS.get(self.project_type, LANGUAGE_DEFAULTS[ProjectType.GENERIC])
-
-
 class RuntimeConfig(BaseModel):
     """``runtime:`` section — LLM 和 MCP 运行时参数。
 
@@ -191,8 +179,6 @@ class RuntimeConfig(BaseModel):
     # ★ 新增：并发控制
     max_concurrent_mcp_calls: int = Field(default=5, ge=1)
     max_retries: int = Field(default=3, ge=0)
-
-
 class TaskConfig(BaseModel):
     """``task:`` section — 任务执行策略。"""
 
@@ -203,26 +189,18 @@ class TaskConfig(BaseModel):
     max_questions_per_round: int = Field(default=5, ge=1)
     # ★ 新增：预算控制
     budget_cents: int = Field(default=20, ge=0)  # 每次运行 LLM 费用上限（分）
-
-
 class MCPServerSpec(BaseModel):
     """单个 MCP server 的启动配置。"""
 
     command: str
     args: list[str] = Field(default_factory=list)
-
-
 class MCPConfig(BaseModel):
     """``mcp:`` section — MCP Server 注册表。"""
 
     servers: dict[str, MCPServerSpec] = Field(default_factory=dict)
-
-
 # ============================================================================
 # Knowledge — 三层预理解模型（方案 v4 §4）
 # ============================================================================
-
-
 class _KnowledgeLayerSummary(BaseModel):
     """Summary 层：每次 run 前刷新。"""
 
@@ -230,8 +208,6 @@ class _KnowledgeLayerSummary(BaseModel):
     diff_base_strategy: str = "merge_base"
     target_branch: str = "main"
     max_recent_commits: int = Field(default=50, ge=1)
-
-
 class _KnowledgeLayerHotspot(BaseModel):
     """Hotspot 层：核心模块分析。"""
 
@@ -243,15 +219,11 @@ class _KnowledgeLayerHotspot(BaseModel):
     key_commit_patterns: list[str] = Field(
         default_factory=lambda: ["schema", "refactor", "API", "migrate"]
     )
-
-
 class _KnowledgeLayerDeep(BaseModel):
     """Deep 层：深度代码索引。"""
 
     build_on_first_warmup: bool = True
     rebuild_trigger: str = "manual"
-
-
 class KnowledgeInvalidation(BaseModel):
     """★ 新增：知识库失效规则（方案 v4 §4.3）"""
 
@@ -276,16 +248,12 @@ class KnowledgeInvalidation(BaseModel):
             "mybatis_mapping_structure_changed",
         ]
     )
-
-
 class KnowledgeLayers(BaseModel):
     """三层知识库配置。"""
 
     summary: _KnowledgeLayerSummary = Field(default_factory=_KnowledgeLayerSummary)
     hotspot: _KnowledgeLayerHotspot = Field(default_factory=_KnowledgeLayerHotspot)
     deep: _KnowledgeLayerDeep = Field(default_factory=_KnowledgeLayerDeep)
-
-
 class KnowledgeConfig(BaseModel):
     """``knowledge:`` section — 知识库完整配置。"""
 
@@ -300,20 +268,14 @@ class KnowledgeConfig(BaseModel):
     doc_extensions: list[str] = Field(
         default_factory=lambda: [".md", ".txt", ".yaml", ".yml", ".json", ".sql"]
     )
-
-
 # ============================================================================
 # Database — v0.1 只读文档索引（方案 v4 §7）
 # ============================================================================
-
-
 class _DBWriteConnection(BaseModel):
     """写连接配置 — v4 明确：永远禁用。"""
 
     enabled: bool = False
     current_version_behavior: str = "never_execute_write_sql"
-
-
 class _DBReadonlyVerify(BaseModel):
     """v0.2 预留：只读连接验证。"""
 
@@ -329,8 +291,6 @@ class _DBReadonlyVerify(BaseModel):
     denied_columns: list[str] = Field(
         default_factory=lambda: ["password", "token", "secret", "id_card", "phone", "email"]
     )
-
-
 class _DBMigration(BaseModel):
     """Migration 策略 — 只生成草稿，不执行。"""
 
@@ -338,8 +298,6 @@ class _DBMigration(BaseModel):
     allow_execute: bool = False
     draft_output_dir: str = ".agent/runs/{run_id}/database/migration-drafts"
     require_dba_review: bool = True
-
-
 class DatabaseConfig(BaseModel):
     """``database:`` section — 完整数据库策略。"""
 
@@ -362,42 +320,30 @@ class DatabaseConfig(BaseModel):
     entity_paths: list[str] = Field(
         default_factory=lambda: ["src/main/java/**/*Entity.java"]
     )
-
-
 # ============================================================================
 # Git — 完整分支/提交策略（方案 v4 §8）
 # ============================================================================
-
-
 class _BranchNaming(BaseModel):
     """分支命名规范。"""
 
     template: str = "agent/{yyyyMMdd}-{task_slug}"
     regex: str = "^agent/[0-9]{8}-[a-z0-9][a-z0-9._-]{2,80}$"
-
-
 class _WorktreePolicy(BaseModel):
     """工作区保护策略。"""
 
     require_clean_before_run: bool = True
     allow_untracked: bool = False
     on_dirty: str = "stop_and_ask"  # stop_and_ask | auto_stash | ignore
-
-
 class _CommitMessage(BaseModel):
     """★ 新增：Commit Message 模板。"""
 
     template: str = "{type}: {summary}"
     regex: str = r"^(feat|fix|refactor|chore|docs|style|perf|revert)(\([A-Za-z0-9._-]+\))?: .{1,100}$"
-
-
 class _PushPolicy(BaseModel):
     """★ 新增：Push 策略。"""
 
     allowed_branch_regex: str = "^agent/[A-Za-z0-9._/-]+$"
     denied_branch_regex: str = "^(master|main|release/.*|hotfix/.*)$"
-
-
 class GitConfig(BaseModel):
     """``git:`` section — 完整版本控制策略。"""
 
@@ -416,13 +362,9 @@ class GitConfig(BaseModel):
     protected_branches: list[str] = Field(
         default_factory=lambda: ["master", "main", "release/*", "hotfix/*"]
     )
-
-
 # ============================================================================
 # Change Policy — 变更范围护栏（方案 v4 §8.2）
 # ============================================================================
-
-
 class _ChangeClarificationTriggers(BaseModel):
     """★ 新增：需要澄清的变更场景。"""
 
@@ -433,8 +375,6 @@ class _ChangeClarificationTriggers(BaseModel):
     database_schema_changed: bool = True
     more_than_max_files_changed: bool = True
     more_than_max_lines_changed: bool = True
-
-
 class ChangePolicyConfig(BaseModel):
     """``change_policy:`` section — 变更范围护栏。"""
 
@@ -447,13 +387,9 @@ class ChangePolicyConfig(BaseModel):
     require_clarification_when: _ChangeClarificationTriggers = Field(
         default_factory=_ChangeClarificationTriggers
     )
-
-
 # ============================================================================
 # MR — Merge Request 配置（方案 v4 §12）
 # ============================================================================
-
-
 class MRConfig(BaseModel):
     """★ 新增：``mr:`` section。"""
 
@@ -463,13 +399,9 @@ class MRConfig(BaseModel):
     description_template: str = ".agent/templates/mr_description.md"
     # MR 描述中强制标记"未测试"
     require_untested_marker: bool = True
-
-
 # ============================================================================
 # Clarification — 澄清配置（方案 v4 §11）
 # ============================================================================
-
-
 class _ClarificationAskWhen(BaseModel):
     """★ 新增：触发澄清的条件。"""
 
@@ -483,8 +415,6 @@ class _ClarificationAskWhen(BaseModel):
     unclear_target_module: bool = True
     dependency_file_changed: bool = True
     exceeds_change_scope: bool = True
-
-
 class ClarificationConfig(BaseModel):
     """★ 新增：``clarification:`` section。"""
 
@@ -493,13 +423,9 @@ class ClarificationConfig(BaseModel):
     max_questions_per_round: int = Field(default=5, ge=1)
     max_clarification_rounds: int = Field(default=3, ge=0)
     ask_when: _ClarificationAskWhen = Field(default_factory=_ClarificationAskWhen)
-
-
 # ============================================================================
 # Retrieval Weights — 检索权重（方案 v4 §11）
 # ============================================================================
-
-
 class RetrievalWeights(BaseModel):
     """★ 新增：``retrieval_weights:`` — 不同来源的检索权重。"""
 
@@ -530,13 +456,9 @@ class RetrievalWeights(BaseModel):
     file_path_match: float = Field(default=0.45, ge=0, le=2)
     freshness: float = Field(default=0.40, ge=0, le=2)
     commit_message: float = Field(default=0.20, ge=0, le=2)
-
-
 # ============================================================================
 # Security — 安全边界（方案 v4 §9）
 # ============================================================================
-
-
 class SecurityConfig(BaseModel):
     """★ 安全配置 — P4-21 扩展黑名单。"""
 
@@ -581,13 +503,9 @@ class SecurityConfig(BaseModel):
     check_file_reads: bool = True
     check_file_writes: bool = True
     max_file_size_bytes: int = Field(default=10 * 1024 * 1024, ge=1)  # 10MB
-
-
 # ============================================================================
 # Top-level aggregate model
 # ============================================================================
-
-
 class AppConfig(BaseModel):
     """Aggregate of every config section — mirrors the shape of ``config.yaml``."""
 
@@ -659,8 +577,6 @@ class AppConfig(BaseModel):
     def is_language(self, lang: ProjectType) -> bool:
         """检查当前项目是否属于指定语言类型。"""
         return self.project.project_type == lang
-
-
 # ============================================================================
 # ★ P3-16: 环境变量解析
 # ============================================================================
@@ -673,20 +589,15 @@ def resolve_env_vars(value: str) -> str:
       ${VAR_NAME}   — 替换为环境变量值，未设置则保留原样
       ${VAR:default} — 替换为环境变量值，未设置则使用 default
     """
-    import re as _re
-    import os as _os
-
     def _replacer(match):
         expr = match.group(1)
         if ":" in expr:
             var_name, default = expr.split(":", 1)
-            return _os.environ.get(var_name, default)
-        return _os.environ.get(expr, match.group(0))
+            return os.environ.get(var_name, default)
+        return os.environ.get(expr, match.group(0))
 
-    return _re.sub(r"\$\{([^}]+)\}", _replacer, value)
+    return re.sub(r"\\$\\{([^}]+)\\}", _replacer, value)
 
-
-# ============================================================================
 # ★ P3-16: 预定义配置 Profiles
 # ★ v0.2.0: 所有外网URL统一走环境变量，不硬编码
 # ============================================================================
@@ -721,8 +632,6 @@ PROFILES: dict[str, dict] = {
     "internal": INTERNAL_PROFILE,
     "github-demo": GITHUB_DEMO_PROFILE,
 }
-
-
 def apply_profile(base_config: dict, profile_name: str) -> dict:
     """
     将 profile 配置合并到基础配置中（浅合并）。
@@ -744,13 +653,9 @@ def apply_profile(base_config: dict, profile_name: str) -> dict:
             merged[section] = {}
         merged[section].update(values)
     return merged
-
-
 # ============================================================================
 # Config loader — the public API
 # ============================================================================
-
-
 class ConfigLoader:
     """Loads ``config.yaml``, validates with Pydantic v2, caches the result.
 
@@ -823,13 +728,9 @@ class ConfigLoader:
             raise ValueError(f"config.yaml must be a mapping, got {type(data).__name__}")
 
         return data
-
-
 # ============================================================================
 # Module-level convenience function
 # ============================================================================
-
-
 def load_config(config_path: str | Path | None = None) -> AppConfig:
     """One-shot helper: load and return the typed config.
 
@@ -839,8 +740,6 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     """
     loader = ConfigLoader(config_path)
     return loader.config
-
-
 # ============================================================================
 # Quick smoke-test
 # ============================================================================

@@ -581,7 +581,6 @@ class DatabaseMCPServer(BaseMCPServer):
         name = pf.stem.lower()
 
         # ── Java Entity 命名规则：UserEntity → user / User → user ──
-        import re
         # 去掉 Entity/Model/PO 后缀
         clean = re.sub(r"(entity|model|po|vo|dto)$", "", name, flags=re.IGNORECASE)
         # 驼峰转下划线

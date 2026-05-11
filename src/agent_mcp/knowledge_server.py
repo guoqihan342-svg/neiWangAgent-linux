@@ -23,6 +23,7 @@ v0.2 计划：AST 解析、函数签名提取、调用图构建。
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -479,7 +480,6 @@ class KnowledgeMCPServer(BaseMCPServer):
             "typescript": r"^(?:import\\s+.*?from\\s+['\\\"]|require\\()['\\\"]([^'\\\"]+)",
         }
 
-        import re
         for f in files:
             try:
                 rel = str(f.relative_to(root))
@@ -541,8 +541,6 @@ class KnowledgeMCPServer(BaseMCPServer):
           2. 解析 <resultMap> / <select> / <insert> 中的 parameterType / resultType
           3. 匹配到 Java Entity 类
         """
-        import re
-
         mappings: dict[str, dict] = {}
         entity_classes: dict[str, Path] = {}
 
@@ -627,8 +625,6 @@ class KnowledgeMCPServer(BaseMCPServer):
           2. 解析 <script setup> 中的组件名和 props
           3. 找到 router 配置文件，提取路由表
         """
-        import re
-
         components: list[dict] = []
         routes: list[dict] = []
 

@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +34,7 @@ from agent_mcp.config_loader import AppConfig
 from agent_mcp.llm_client import LLMClient
 from agent_mcp.tracing import get_tracer, Tracer
 from agent_mcp.code_parser import parse_code_changes
+from fnmatch import fnmatch
 # ★ P1-6: MCP Server 集成 — Orchestrator 通过 MCP 接口操作 Git/MR/Knowledge
 from agent_mcp.git_server import GitMCPServer
 from agent_mcp.mr_server import MRMCPServer, get_mr_provider
@@ -359,8 +361,6 @@ class Orchestrator:
           - OPTIONAL 状态失败 → 记录warning，降级跳过
           - HUMAN 状态失败 → PAUSED，等待人工
         """
-        import time as _time
-
         max_retries = getattr(self.config.runtime, 'max_retries', 3)
         no_retry_states = {State.CLARIFICATION_GATE, State.ASK_HUMAN, State.DONE}
 
@@ -452,7 +452,7 @@ class Orchestrator:
                         detail={"attempt": attempt + 1, "wait": wait, "error": str(e)[:200]}
                     )
                     print(f"    ⏳ 重试 {attempt + 1}/{retries} ({wait}s后)...")
-                    _time.sleep(wait)
+                    time.sleep(wait)
                 else:
                     self.tracer.error(
                         f"state.{name}.failed", step=state,
@@ -884,8 +884,6 @@ class Orchestrator:
 
         日志：记录文件数、行数、违规文件和是否超限
         """
-        from fnmatch import fnmatch
-
         policy = self.config.change_policy
         n = len(self.run_state.files_changed)
         lines = self.run_state.lines_changed
@@ -1384,7 +1382,6 @@ class Orchestrator:
             "**/*Mapper.xml", "**/*.sql", "pom.xml", "package.json",
             "go.mod", "pyproject.toml", "**/migration/**",
         ]
-        from fnmatch import fnmatch
         changed = []
         try:
             result = subprocess.run(

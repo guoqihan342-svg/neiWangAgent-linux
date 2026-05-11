@@ -8,6 +8,7 @@ Git MCP Server v0.1 — 版本控制操作
 """
 
 import json
+import re
 import sys
 import subprocess
 import time
@@ -156,7 +157,6 @@ class GitMCPServer(BaseMCPServer):
         if rc != 0:
             raise RuntimeError(f"提交失败: {err}")
         # 提取 commit SHA
-        import re
         m = re.search(r"\[[^\]]+\s+([a-f0-9]+)", out + err)
         sha = m.group(1) if m else "unknown"
         return {"message": message, "committed": True, "sha": sha, "files": files}
@@ -167,8 +167,7 @@ class GitMCPServer(BaseMCPServer):
         if force:
             raise ValueError("禁止 force push（安全策略）")
         # ★ P1-10: 分支名校验（仅允许 agent/ 开头）
-        import re as _re
-        if not _re.match(r"^agent/[A-Za-z0-9._/-]+$", branch):
+        if not re.match(r"^agent/[A-Za-z0-9._/-]+$", branch):
             raise ValueError(f"分支名不符合推送策略: {branch}（必须以 agent/ 开头）")
         rc, out, err = self._run(["git", "push", "origin", branch])
         if rc != 0:
