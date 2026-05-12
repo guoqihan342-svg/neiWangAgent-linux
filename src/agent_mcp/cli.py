@@ -420,7 +420,14 @@ def cmd_init(profile: str) -> None:
 # =============================================================================
 
 @main.command("warmup")
-def cmd_warmup() -> None:
+@click.option(
+    "--v2",
+    "use_v2",
+    is_flag=True,
+    default=False,
+    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+)
+def cmd_warmup(use_v2: bool = False) -> None:
     """构建知识库（Knowledge MCP 三层预热）。
 
     依次执行：
@@ -432,7 +439,10 @@ def cmd_warmup() -> None:
     """
     tracer.info("cli.warmup.start")  # ★ 日志
     from agent_mcp.config_loader import load_config  # ★ 延迟 import
-    from agent_mcp.orchestrator import Orchestrator
+    if use_v2:
+        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+    else:
+        from agent_mcp.orchestrator import Orchestrator as OrchClass
     click.echo()
     click.secho("🔥 开始知识库预热...", fg="cyan", bold=True)
 
@@ -445,7 +455,7 @@ def cmd_warmup() -> None:
         click.secho(f"❌ 加载配置文件失败：{exc}", fg="red")
         sys.exit(1)
 
-    orch = Orchestrator(config)
+    orch = OrchClass(config)
 
     try:
         orch.warmup()
@@ -469,7 +479,14 @@ def cmd_warmup() -> None:
     type=click.Path(exists=True, dir_okay=False, readable=True),
     help="需求描述文件路径（.md / .txt / .yaml）。",
 )
-def cmd_run(task_file: str) -> None:
+@click.option(
+    "--v2",
+    "use_v2",
+    is_flag=True,
+    default=False,
+    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+)
+def cmd_run(task_file: str, use_v2: bool = False) -> None:
     """执行完整的 agent 流程。
 
     读取需求文件 → 状态机驱动执行 → commit → push → 创建 MR。
@@ -479,7 +496,10 @@ def cmd_run(task_file: str) -> None:
     """
     tracer.info("cli.run.start", detail={"task_file": task_file})  # ★ 日志
     from agent_mcp.config_loader import load_config  # ★ 延迟 import
-    from agent_mcp.orchestrator import Orchestrator
+    if use_v2:
+        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+    else:
+        from agent_mcp.orchestrator import Orchestrator as OrchClass
     task_path = Path(task_file).resolve()
     click.echo()
     click.secho(f"📄 读取需求文件：{task_path}", fg="cyan")
@@ -505,7 +525,7 @@ def cmd_run(task_file: str) -> None:
 
     click.secho("🚀 启动 agent 执行引擎...", fg="cyan", bold=True)
 
-    orch = Orchestrator(config)
+    orch = OrchClass(config)
 
     try:
         orch.run(requirement_text)
@@ -523,7 +543,14 @@ def cmd_run(task_file: str) -> None:
 
 @main.command("resume")
 @click.argument("run_id", required=True)
-def cmd_resume(run_id: str) -> None:
+@click.option(
+    "--v2",
+    "use_v2",
+    is_flag=True,
+    default=False,
+    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+)
+def cmd_resume(run_id: str, use_v2: bool = False) -> None:
     """从之前的运行状态恢复执行。
 
     RUN_ID 为 .agent/runs/ 下的运行目录名。
@@ -533,7 +560,10 @@ def cmd_resume(run_id: str) -> None:
     """
     tracer.info("cli.resume.start", detail={"run_id": run_id})  # ★ 日志
     from agent_mcp.config_loader import load_config  # ★ 延迟 import
-    from agent_mcp.orchestrator import Orchestrator
+    if use_v2:
+        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+    else:
+        from agent_mcp.orchestrator import Orchestrator as OrchClass
     state_file = PROJECT_ROOT / ".agent" / "runs" / run_id / "state.json"
 
     click.echo()
@@ -553,7 +583,7 @@ def cmd_resume(run_id: str) -> None:
         click.secho(f"❌ 加载配置文件失败：{exc}", fg="red")
         sys.exit(1)
 
-    orch = Orchestrator(config)
+    orch = OrchClass(config)
 
     try:
         orch.resume(run_id)
