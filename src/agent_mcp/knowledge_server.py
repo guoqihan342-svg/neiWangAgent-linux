@@ -1,5 +1,5 @@
 """
-Knowledge MCP Server v0.1 — 三层预理解模型 + 多语言支持
+Knowledge MCP Server v0.3.0 — 三层预理解模型 + PageRank + Tree-sitter
 
 职责：代码知识库构建与检索
 
@@ -31,6 +31,9 @@ from typing import Any
 
 from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
 from agent_mcp.base_mcp import BaseMCPServer  # ★ 继承基类
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -525,6 +528,404 @@ class KnowledgeMCPServer(BaseMCPServer):
                        f"{len(mapper_entity)} 个 Mapper→Entity 映射, "
                        f"{len(vue_analysis.get('components', []))} 个 Vue 组件",
         }
+
+    # ------------------------------------------------------------------
+    # ★ v0.3.0: PageRank 代码排名 + Tree-sitter AST 解析（吸收 Aider 精华）
+    # ------------------------------------------------------------------
+
+    def _pagerank_map(
+        self,
+        import_map: dict[str, list[str]],
+        definition_map: dict[str, int],
+    ) -> dict[str, float]:
+        """
+        使用 PageRank 算法对代码文件进行重要性排名。
+
+        Aider 核心特性:
+            - 构建定义-引用有向图（文件 → 被引用的文件）
+            - 用 networkx PageRank 计算每个文件的"权威性"
+            - 高 PageRank 文件 = 被很多文件引用 = 核心模块
+            - 用于 Orchestrator 决定检索时优先给哪些文件的上下文
+
+        算法流程:
+            1. 为每个文件创建图节点
+            2. 如果文件 A import 了文件 B，添加边 A → B
+            3. 运行 networkx.pagerank()
+            4. 按得分降序返回
+
+        Args:
+            import_map: {文件路径: [导入的外部模块列表]}
+            definition_map: {文件路径: 定义数量}
+
+        Returns:
+            {文件路径: PageRank 得分}，按得分降序排列
+        """
+        try:
+            import networkx as nx
+        except ImportError:
+            logger.warning("networkx 未安装，跳过 PageRank 排名")
+            # 降级: 按定义数量排序
+            sorted_items = sorted(definition_map.items(), key=lambda x: x[1], reverse=True)
+            return {k: float(v) for k, v in sorted_items[:50]}
+
+        logger.info("正在计算 PageRank 代码排名...")
+        G = nx.DiGraph()
+
+        # 添加所有文件为节点
+        all_files = set(import_map.keys()) | set(definition_map.keys())
+        for filepath in all_files:
+            G.add_node(filepath, weight=definition_map.get(filepath, 1))
+
+        # 构建引用边: 如果 A import 了 B 相关的模块，添加 A → B
+        # 简化策略: 用 import 路径的前缀匹配文件名
+        file_set = set(all_files)
+        for filepath, imports in import_map.items():
+            for imp in imports:
+                # 尝试将 import 路径匹配到实际文件
+                imp_parts = imp.replace(".", "/").split("/")
+                for candidate in file_set:
+                    candidate_name = candidate.replace("\\", "/")
+                    # 匹配策略: import 的最后一段匹配文件名的最后一段
+                    if imp_parts and imp_parts[-1] in candidate_name:
+                        if filepath != candidate_name:
+                            G.add_edge(filepath, candidate_name)
+
+        if G.number_of_edges() == 0:
+            logger.info("PageRank: 图中无边，降级为定义数量排序")
+            if definition_map:
+                sorted_items = sorted(definition_map.items(), key=lambda x: x[1], reverse=True)
+                return {k: float(v) for k, v in sorted_items[:50]}
+            return {}
+
+        # 运行 PageRank
+        try:
+            pr = nx.pagerank(G, alpha=0.85, max_iter=100, tol=1e-6)
+        except Exception as e:
+            logger.warning(f"PageRank 计算失败 ({e})，降级为入度排序")
+            # 降级: 按入度排序
+            in_degree = {node: G.in_degree(node) for node in G.nodes()}
+            sorted_pr = dict(
+                sorted(in_degree.items(), key=lambda x: x[1], reverse=True)
+            )
+            return sorted_pr
+
+        # 按得分降序排列
+        sorted_pr = dict(
+            sorted(pr.items(), key=lambda x: x[1], reverse=True)
+        )
+
+        logger.info(
+            f"PageRank 完成: {len(sorted_pr)} 个文件, "
+            f"最高分 {next(iter(sorted_pr.values()), 0):.4f}"
+        )
+        return sorted_pr
+
+    def _parse_with_tree_sitter(
+        self,
+        filepath: Path,
+        content: str,
+        lang: str,
+    ) -> dict[str, Any]:
+        """
+        使用 Tree-sitter 进行 AST 级别解析。
+
+        比正则表达式的优势:
+            - 精确识别函数/类/方法的边界（不受注释/字符串干扰）
+            - 准确提取导入语句
+            - 构建调用图（函数 A 调用了函数 B）
+            - 识别嵌套结构（类内部的方法）
+
+        支持的语言:
+            - Python (.py)
+            - Java (.java)
+            - Go (.go)
+            - TypeScript (.ts, .tsx)
+            - C/C++ (.c, .h, .cpp, .hpp)
+            - JavaScript (.js, .jsx)
+
+        Args:
+            filepath: 文件路径
+            content: 文件内容
+            lang: 语言标识
+
+        Returns:
+            {
+                "definitions": [{"name": "func_name", "type": "function", "line": 42, "params": [...]}],
+                "imports": [{"module": "os", "symbols": ["path"], "line": 1}],
+                "calls": [{"caller": "func_a", "callee": "func_b", "line": 45}],
+                "classes": [{"name": "ClassName", "line": 10, "methods": [...]}],
+            }
+        """
+        # Tree-sitter 语言映射
+        TREE_SITTER_LANG_MAP = {
+            "python": "python",
+            "java": "java",
+            "go": "go",
+            "typescript": "typescript",
+            "javascript": "javascript",
+        }
+
+        ts_lang_name = TREE_SITTER_LANG_MAP.get(lang)
+        if not ts_lang_name:
+            # 不支持 Tree-sitter 的语言，降级为正则
+            return self._parse_with_regex(filepath, content, lang)
+
+        try:
+            import tree_sitter
+        except ImportError:
+            logger.debug("tree-sitter 未安装，降级为正则解析")
+            return self._parse_with_regex(filepath, content, lang)
+
+        # 动态加载语言语法
+        try:
+            # 尝试多种常见的语法库查找方式
+            grammar = None
+            for grammar_module in [
+                f"tree_sitter_{ts_lang_name}",
+                ts_lang_name,
+            ]:
+                try:
+                    mod = __import__(grammar_module, fromlist=["language"])
+                    grammar = mod.language()
+                    break
+                except (ImportError, AttributeError):
+                    continue
+
+            if grammar is None:
+                raise ImportError(f"找不到 {ts_lang_name} 的 tree-sitter 语法")
+
+            parser = tree_sitter.Parser(tree_sitter.Language(grammar))
+        except Exception as e:
+            logger.debug(f"Tree-sitter 初始化失败 ({lang}): {e}，降级为正则")
+            return self._parse_with_regex(filepath, content, lang)
+
+        # 解析 AST
+        try:
+            tree = parser.parse(bytes(content, "utf-8"))
+        except Exception as e:
+            logger.warning(f"Tree-sitter 解析失败 ({filepath}): {e}")
+            return self._parse_with_regex(filepath, content, lang)
+
+        root_node = tree.root_node
+
+        result = {
+            "definitions": [],
+            "imports": [],
+            "calls": [],
+            "classes": [],
+        }
+
+        # 遍历 AST 提取信息
+        self._traverse_tree_sitter(root_node, content, lang, result)
+
+        return result
+
+    def _traverse_tree_sitter(
+        self,
+        node: Any,
+        content: str,
+        lang: str,
+        result: dict,
+    ):
+        """
+        递归遍历 Tree-sitter AST 节点。
+
+        按语言识别关键节点类型:
+            - Python: function_definition, class_definition, import_statement
+            - Java: method_declaration, class_declaration, import_declaration
+            - Go: function_declaration, type_declaration, import_declaration
+            - TypeScript: function_declaration, class_declaration, import_statement
+        """
+        # Python 节点识别
+        if lang == "python":
+            if node.type == "function_definition":
+                name_node = node.child_by_field_name("name")
+                params_node = node.child_by_field_name("parameters")
+                if name_node:
+                    params_text = content[params_node.start_byte:params_node.end_byte] if params_node else ""
+                    result["definitions"].append({
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "type": "function",
+                        "line": node.start_point[0] + 1,
+                        "params": params_text,
+                    })
+            elif node.type == "class_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    class_info = {
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "line": node.start_point[0] + 1,
+                        "methods": [],
+                    }
+                    # 提取类内方法
+                    body_node = node.child_by_field_name("body")
+                    if body_node:
+                        for child in body_node.children:
+                            if child.type == "function_definition":
+                                m_name = child.child_by_field_name("name")
+                                if m_name:
+                                    class_info["methods"].append(
+                                        content[m_name.start_byte:m_name.end_byte]
+                                    )
+                    result["classes"].append(class_info)
+            elif node.type in ("import_statement", "import_from_statement"):
+                imp_text = content[node.start_byte:node.end_byte]
+                result["imports"].append({
+                    "raw": imp_text,
+                    "line": node.start_point[0] + 1,
+                })
+            elif node.type == "call":
+                func_node = node.child_by_field_name("function")
+                if func_node:
+                    result["calls"].append({
+                        "callee": content[func_node.start_byte:func_node.end_byte],
+                        "line": node.start_point[0] + 1,
+                    })
+
+        # Java 节点识别
+        elif lang == "java":
+            if node.type == "method_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    result["definitions"].append({
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "type": "method",
+                        "line": node.start_point[0] + 1,
+                    })
+            elif node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    class_info = {
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "line": node.start_point[0] + 1,
+                        "methods": [],
+                    }
+                    body_node = node.child_by_field_name("body")
+                    if body_node:
+                        for child in body_node.children:
+                            if child.type == "method_declaration":
+                                m_name = child.child_by_field_name("name")
+                                if m_name:
+                                    class_info["methods"].append(
+                                        content[m_name.start_byte:m_name.end_byte]
+                                    )
+                    result["classes"].append(class_info)
+            elif node.type == "import_declaration":
+                imp_text = content[node.start_byte:node.end_byte]
+                result["imports"].append({
+                    "raw": imp_text.strip(";"),
+                    "line": node.start_point[0] + 1,
+                })
+
+        # Go 节点识别
+        elif lang == "go":
+            if node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    result["definitions"].append({
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "type": "function",
+                        "line": node.start_point[0] + 1,
+                    })
+            elif node.type == "type_declaration":
+                # struct / interface
+                for child in node.children:
+                    if child.type == "type_spec":
+                        name_node = child.child_by_field_name("name")
+                        if name_node:
+                            result["definitions"].append({
+                                "name": content[name_node.start_byte:name_node.end_byte],
+                                "type": "type",
+                                "line": child.start_point[0] + 1,
+                            })
+            elif node.type == "import_declaration":
+                imp_text = content[node.start_byte:node.end_byte]
+                result["imports"].append({
+                    "raw": imp_text,
+                    "line": node.start_point[0] + 1,
+                })
+
+        # TypeScript 节点识别
+        elif lang in ("typescript", "javascript"):
+            if node.type in ("function_declaration", "method_definition"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    result["definitions"].append({
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "type": "function",
+                        "line": node.start_point[0] + 1,
+                    })
+            elif node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    result["classes"].append({
+                        "name": content[name_node.start_byte:name_node.end_byte],
+                        "line": node.start_point[0] + 1,
+                    })
+            elif node.type in ("import_statement", "lexical_declaration"):
+                imp_text = content[node.start_byte:node.end_byte]
+                result["imports"].append({
+                    "raw": imp_text.strip(";"),
+                    "line": node.start_point[0] + 1,
+                })
+
+        # 递归遍历子节点
+        for child in node.children:
+            self._traverse_tree_sitter(child, content, lang, result)
+
+    def _parse_with_regex(
+        self,
+        filepath: Path,
+        content: str,
+        lang: str,
+    ) -> dict[str, Any]:
+        """
+        正则表达式降级解析。
+
+        当 Tree-sitter 不可用时使用此方法。
+        """
+        result = {
+            "definitions": [],
+            "imports": [],
+            "calls": [],
+            "classes": [],
+        }
+
+        # 语言特定的正则模式
+        if lang == "python":
+            # 函数定义
+            for m in re.finditer(
+                r"^\s*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)",
+                content, re.MULTILINE
+            ):
+                result["definitions"].append({
+                    "name": m.group(1),
+                    "type": "function",
+                    "line": content[:m.start()].count("\n") + 1,
+                    "params": m.group(2),
+                })
+            # 类定义
+            for m in re.finditer(
+                r"^\s*class\s+(\w+)",
+                content, re.MULTILINE
+            ):
+                result["classes"].append({
+                    "name": m.group(1),
+                    "line": content[:m.start()].count("\n") + 1,
+                })
+        elif lang == "java":
+            for m in re.finditer(
+                r"(?:public|private|protected)?\s*(?:static\s+)?\w+\s+(\w+)\s*\(([^)]*)\)",
+                content
+            ):
+                if m.group(1) not in ("if", "while", "for", "switch", "return"):
+                    result["definitions"].append({
+                        "name": m.group(1),
+                        "type": "method",
+                        "line": content[:m.start()].count("\n") + 1,
+                    })
+
+        return result
 
     # ------------------------------------------------------------------
     # ★ P3-18: Java/MyBatis Mapper → Entity 映射
