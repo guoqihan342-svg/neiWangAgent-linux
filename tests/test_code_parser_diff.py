@@ -6,7 +6,7 @@ test_code_parser_diff.py — Unified Diff 应用引擎测试
 import pytest
 import tempfile
 from pathlib import Path
-from agent_mcp.code_parser import apply_unified_diff
+from graphforge.code_parser import apply_unified_diff
 
 
 class TestApplyUnifiedDiff:

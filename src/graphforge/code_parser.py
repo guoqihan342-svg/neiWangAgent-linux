@@ -19,7 +19,7 @@
   - ★ Patch 模式: 仅生成变更部分，不对原文件做完整替换
 
 用法：
-    from agent_mcp.code_parser import parse_code_changes
+    from graphforge.code_parser import parse_code_changes
 
     files = parse_code_changes(llm_output)
     # → [CodeFile(path="src/main.py", content="...", language="python"), ...]

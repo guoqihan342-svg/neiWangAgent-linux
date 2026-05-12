@@ -4,7 +4,7 @@ Clarification MCP Server v0.1.5 — 澄清沟通 + 文件存档
 ★ P2-13: 澄清内容落文件（不只是终端打印）
 
 存档结构：
-  .agent/runs/{run_id}/clarification/
+  .graphforge/runs/{run_id}/clarification/
     questions.md      — 人类可读问题列表
     questions.json    — 结构化问题
     copy_message.md   — 可复制消息模板（用于粘贴回复）
@@ -19,7 +19,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from agent_mcp.base_mcp import BaseMCPServer
+from graphforge.base_mcp import BaseMCPServer
 
 
 class ClarificationMCPServer(BaseMCPServer):
@@ -88,7 +88,7 @@ class ClarificationMCPServer(BaseMCPServer):
     @staticmethod
     def _clarification_dir(run_id: str) -> Path:
         """获取澄清存档目录。"""
-        d = Path(f".agent/runs/{run_id}/clarification")
+        d = Path(f".graphforge/runs/{run_id}/clarification")
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -179,7 +179,7 @@ class ClarificationMCPServer(BaseMCPServer):
             return {"status": "no_answers", "questions": data.get("questions", [])}
 
         # fallback: 读旧格式
-        old_path = Path(f".agent/runs/{run_id}/clarification.json")
+        old_path = Path(f".graphforge/runs/{run_id}/clarification.json")
         if old_path.exists():
             data = json.loads(old_path.read_text(encoding="utf-8"))
             if data.get("answers"):

@@ -10,7 +10,7 @@
 
 使用示例：
 
-    from agent_mcp.tracing import get_tracer
+    from graphforge.tracing import get_tracer
 
     tracer = get_tracer()
     tracer.info("agent.start", requirement="修bug")
@@ -22,7 +22,7 @@
 输出格式（控制台）：
     12:34:56 [INFO ] state.WORKTREE_GUARD | duration=0.23s | ✅ 工作区干净
 
-输出格式（文件 .agent/logs/agent.jsonl）：
+输出格式（文件 .graphforge/logs/agent.jsonl）：
     {"ts":"2026-05-10T12:34:56","level":"INFO","event":"state.WORKTREE_GUARD","duration":0.23,"ok":true}
 """
 
@@ -151,7 +151,7 @@ def _build_logger(name: str = "neiWangAgent") -> logging.Logger:
     构建并配置一个 logger 实例。
 
     特性：
-      - 日志文件路径：.agent/logs/agent.log（自动创建目录）
+      - 日志文件路径：.graphforge/logs/agent.log（自动创建目录）
       - 文件轮转：单文件 10MB，保留 5 个历史文件
       - 控制台输出：仅 WARNING 及以上（避免刷屏）
       - 文件输出：DEBUG 及以上（完整记录）
@@ -173,7 +173,7 @@ def _build_logger(name: str = "neiWangAgent") -> logging.Logger:
 
     # ========== 文件 Handler（DEBUG+，JSON 格式） ==========
     if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
-        log_dir = Path(".agent/logs")
+        log_dir = Path(".graphforge/logs")
         log_dir.mkdir(parents=True, exist_ok=True)
 
         file_handler = RotatingFileHandler(

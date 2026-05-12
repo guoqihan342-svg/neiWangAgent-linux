@@ -10,8 +10,8 @@ import pytest
 import json
 import tempfile
 from pathlib import Path
-from agent_mcp.orchestrator import Orchestrator, State, CRITICAL_STATES, OPTIONAL_STATES
-from agent_mcp.config_loader import AppConfig, ProjectConfig
+from graphforge.orchestrator import Orchestrator, State, CRITICAL_STATES, OPTIONAL_STATES
+from graphforge.config_loader import AppConfig, ProjectConfig
 
 
 class TestOrchestratorInit:
@@ -55,7 +55,7 @@ class TestRunState:
     """RunState 序列化。"""
 
     def test_to_dict_and_back(self):
-        from agent_mcp.orchestrator import RunState
+        from graphforge.orchestrator import RunState
         rs = RunState("test-001", "add login")
         rs.branch_name = "agent/20260511-test"
         d = rs.to_dict()
@@ -93,14 +93,14 @@ class TestStateMachineFlow:
     """状态机流程。"""
 
     def test_transitions_exist_for_all_states(self):
-        from agent_mcp.orchestrator import TRANSITIONS, STATE_NAMES
+        from graphforge.orchestrator import TRANSITIONS, STATE_NAMES
         all_handled_states = set()
         for state_obj in [v for k, v in vars(State).items() if not k.startswith("_") and isinstance(v, str)]:
             if state_obj != State.DONE:
                 assert state_obj in TRANSITIONS, f"Missing transition for {state_obj}"
 
     def test_no_dead_ends(self):
-        from agent_mcp.orchestrator import TRANSITIONS
+        from graphforge.orchestrator import TRANSITIONS
         for src, dst in TRANSITIONS.items():
             if dst is None:
                 assert src in (State.DONE, State.WAITING_CLARIFICATION), f"Unexpected dead end: {src}"

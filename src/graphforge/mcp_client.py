@@ -135,7 +135,7 @@ class MCPStdioClient:
 
     Typical usage::
 
-        async with MCPStdioClient(["python", "-m", "agent_mcp.my_server"]) as client:
+        async with MCPStdioClient(["python", "-m", "graphforge.my_server"]) as client:
             info = await client.initialize()
             tools = await client.list_tools()
             result = await client.call_tool("my_tool", {"arg": "val"})

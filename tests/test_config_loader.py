@@ -7,7 +7,7 @@ test_config_loader.py — 配置加载器测试
   - deny_paths 安全校验（通过 AppConfig 实例方法）
 """
 import pytest
-from agent_mcp.config_loader import (
+from graphforge.config_loader import (
     ProjectConfig,
     ProjectType,
     AppConfig,

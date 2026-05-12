@@ -23,7 +23,7 @@ agents/__init__.py — 多 Agent 协作系统 v0.3.0
     GitAgent → commit → push → MR
 
 使用方式：
-    from agent_mcp.agents import (
+    from graphforge.agents import (
         Tool, CodeAgentTool, create_tool,
         BaseAgent, ResearchAgent, PlanAgent, CodeAgent, ReviewAgent, GitAgent,
         AgentPipeline,

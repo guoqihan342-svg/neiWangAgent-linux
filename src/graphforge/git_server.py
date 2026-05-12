@@ -14,8 +14,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from agent_mcp.tracing import get_tracer, Tracer
-from agent_mcp.base_mcp import BaseMCPServer  # ★ 继承基类
+from graphforge.tracing import get_tracer, Tracer
+from graphforge.base_mcp import BaseMCPServer  # ★ 继承基类
 
 
 class GitMCPServer(BaseMCPServer):

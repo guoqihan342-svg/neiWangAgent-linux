@@ -9,7 +9,7 @@ v0.2: 只读连接验证
 安全红线: 永远不执行 INSERT/UPDATE/DELETE/DROP/TRUNCATE
 
 持久化结构:
-  .agent/knowledge/database/
+  .graphforge/knowledge/database/
     tables.jsonl   — 表定义
     columns.jsonl  — 列定义
     indexes.jsonl  — 索引定义
@@ -22,8 +22,8 @@ import re
 import time
 from pathlib import Path
 
-from agent_mcp.base_mcp import BaseMCPServer
-from agent_mcp.tracing import get_tracer, Tracer
+from graphforge.base_mcp import BaseMCPServer
+from graphforge.tracing import get_tracer, Tracer
 
 
 class DatabaseMCPServer(BaseMCPServer):
@@ -303,7 +303,7 @@ class DatabaseMCPServer(BaseMCPServer):
     @staticmethod
     def _db_dir() -> Path:
         """获取数据库索引持久化目录。"""
-        d = Path(".agent/knowledge/database")
+        d = Path(".graphforge/knowledge/database")
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -581,6 +581,7 @@ class DatabaseMCPServer(BaseMCPServer):
         name = pf.stem.lower()
 
         # ── Java Entity 命名规则：UserEntity → user / User → user ──
+        import re
         # 去掉 Entity/Model/PO 后缀
         clean = re.sub(r"(entity|model|po|vo|dto)$", "", name, flags=re.IGNORECASE)
         # 驼峰转下划线

@@ -8,7 +8,7 @@ test_mcp_base.py — MCP Server 基类测试
 """
 import json
 import pytest
-from agent_mcp.base_mcp import BaseMCPServer
+from graphforge.base_mcp import BaseMCPServer
 
 
 class MockMCPServer(BaseMCPServer):

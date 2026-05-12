@@ -2,10 +2,10 @@
 neiWangAgent CLI — 基于 Click 的命令行入口。
 
 提供 4 个子命令：
-    agent init         创建 .agent/ 目录结构、默认 config.yaml、business-docs/README.md
+    agent init         创建 .graphforge/ 目录结构、默认 config.yaml、business-docs/README.md
     agent warmup       构建知识库（Knowledge MCP 三层预热）
     agent run --task   完整流程：加载需求 → 状态机 → commit → push → MR
-    agent resume       从 .agent/runs/{run_id}/state.json 恢复执行
+    agent resume       从 .graphforge/runs/{run_id}/state.json 恢复执行
 
 ★ P0-2: 延迟 import config_loader / orchestrator，确保 init 命令在无 config.yaml 时也能执行。
 """
@@ -18,9 +18,9 @@ from pathlib import Path
 import click
 
 # ★ 延迟 import — init 命令不依赖这些模块
-# from agent_mcp.config_loader import load_config
-# from agent_mcp.orchestrator import Orchestrator
-from agent_mcp.tracing import get_tracer  # tracing 无外部依赖，安全
+# from graphforge.config_loader import load_config
+# from graphforge.orchestrator import Orchestrator
+from graphforge.tracing import get_tracer  # tracing 无外部依赖，安全
 
 tracer = get_tracer()
 
@@ -78,22 +78,22 @@ mcp:
   servers:
     knowledge:
       command: "python"
-      args: ["-m", "agent_mcp.knowledge_server"]
+      args: ["-m", "graphforge.knowledge_server"]
     requirement:
       command: "python"
-      args: ["-m", "agent_mcp.requirement_server"]
+      args: ["-m", "graphforge.requirement_server"]
     database:
       command: "python"
-      args: ["-m", "agent_mcp.database_server"]
+      args: ["-m", "graphforge.database_server"]
     git:
       command: "python"
-      args: ["-m", "agent_mcp.git_server"]
+      args: ["-m", "graphforge.git_server"]
     mr:
       command: "python"
-      args: ["-m", "agent_mcp.mr_server"]
+      args: ["-m", "graphforge.mr_server"]
     clarification:
       command: "python"
-      args: ["-m", "agent_mcp.clarification_server"]
+      args: ["-m", "graphforge.clarification_server"]
 
 knowledge:
   layers:
@@ -204,22 +204,22 @@ mcp:
   servers:
     knowledge:
       command: "python"
-      args: ["-m", "agent_mcp.knowledge_server"]
+      args: ["-m", "graphforge.knowledge_server"]
     requirement:
       command: "python"
-      args: ["-m", "agent_mcp.requirement_server"]
+      args: ["-m", "graphforge.requirement_server"]
     database:
       command: "python"
-      args: ["-m", "agent_mcp.database_server"]
+      args: ["-m", "graphforge.database_server"]
     git:
       command: "python"
-      args: ["-m", "agent_mcp.git_server"]
+      args: ["-m", "graphforge.git_server"]
     mr:
       command: "python"
-      args: ["-m", "agent_mcp.mr_server"]
+      args: ["-m", "graphforge.mr_server"]
     clarification:
       command: "python"
-      args: ["-m", "agent_mcp.clarification_server"]
+      args: ["-m", "graphforge.clarification_server"]
 
 knowledge:
   layers:
@@ -330,9 +330,9 @@ def cmd_init(profile: str) -> None:
     """初始化项目结构。
 
     创建以下内容：
-        .agent/              工作目录
-        .agent/runs/         运行记录目录
-        .agent/logs/         日志目录
+        .graphforge/              工作目录
+        .graphforge/runs/         运行记录目录
+        .graphforge/logs/         日志目录
         config.yaml          默认配置文件（如不存在）
         business-docs/       业务文档目录
         business-docs/README.md
@@ -346,29 +346,29 @@ def cmd_init(profile: str) -> None:
     created: list[str] = []
     skipped: list[str] = []
 
-    # --- .agent/ 目录 ---
+    # --- .graphforge/ 目录 ---
     agent_dir = root / ".agent"
     if not agent_dir.exists():
         agent_dir.mkdir(parents=True, exist_ok=True)
-        created.append(".agent/")
+        created.append(".graphforge/")
     else:
-        skipped.append(".agent/（已存在）")
+        skipped.append(".graphforge/（已存在）")
 
-    # --- .agent/runs/ 目录 ---
+    # --- .graphforge/runs/ 目录 ---
     runs_dir = agent_dir / "runs"
     if not runs_dir.exists():
         runs_dir.mkdir(parents=True, exist_ok=True)
-        created.append(".agent/runs/")
+        created.append(".graphforge/runs/")
     else:
-        skipped.append(".agent/runs/（已存在）")
+        skipped.append(".graphforge/runs/（已存在）")
 
-    # --- .agent/logs/ 目录（★ 新增：日志存储） ---
+    # --- .graphforge/logs/ 目录（★ 新增：日志存储） ---
     logs_dir = agent_dir / "logs"
     if not logs_dir.exists():
         logs_dir.mkdir(parents=True, exist_ok=True)
-        created.append(".agent/logs/")
+        created.append(".graphforge/logs/")
     else:
-        skipped.append(".agent/logs/（已存在）")
+        skipped.append(".graphforge/logs/（已存在）")
 
     # --- config.yaml ---
     config_path = root / "config.yaml"
@@ -435,14 +435,14 @@ def cmd_warmup(use_v2: bool = False) -> None:
         2. Hotspot 层 — 热点模块分析
         3. Deep 层    — 深度代码索引
 
-    预热结果持久化到 .agent/ 目录，供后续 agent run 使用。
+    预热结果持久化到 .graphforge/ 目录，供后续 agent run 使用。
     """
     tracer.info("cli.warmup.start")  # ★ 日志
-    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from graphforge.config_loader import load_config  # ★ 延迟 import
     if use_v2:
-        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     else:
-        from agent_mcp.orchestrator import Orchestrator as OrchClass
+        from graphforge.orchestrator import Orchestrator as OrchClass
     click.echo()
     click.secho("🔥 开始知识库预热...", fg="cyan", bold=True)
 
@@ -495,11 +495,11 @@ def cmd_run(task_file: str, use_v2: bool = False) -> None:
         需求理解 → 澄清问答 → 方案规划 → 代码实现 → 变更检查 → 提交推送 → 创建 MR
     """
     tracer.info("cli.run.start", detail={"task_file": task_file})  # ★ 日志
-    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from graphforge.config_loader import load_config  # ★ 延迟 import
     if use_v2:
-        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     else:
-        from agent_mcp.orchestrator import Orchestrator as OrchClass
+        from graphforge.orchestrator import Orchestrator as OrchClass
     task_path = Path(task_file).resolve()
     click.echo()
     click.secho(f"📄 读取需求文件：{task_path}", fg="cyan")
@@ -553,17 +553,17 @@ def cmd_run(task_file: str, use_v2: bool = False) -> None:
 def cmd_resume(run_id: str, use_v2: bool = False) -> None:
     """从之前的运行状态恢复执行。
 
-    RUN_ID 为 .agent/runs/ 下的运行目录名。
+    RUN_ID 为 .graphforge/runs/ 下的运行目录名。
 
     示例：
         agent resume 20260510-001
     """
     tracer.info("cli.resume.start", detail={"run_id": run_id})  # ★ 日志
-    from agent_mcp.config_loader import load_config  # ★ 延迟 import
+    from graphforge.config_loader import load_config  # ★ 延迟 import
     if use_v2:
-        from agent_mcp.orchestrator_v2 import AgentOrchestrator as OrchClass
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     else:
-        from agent_mcp.orchestrator import Orchestrator as OrchClass
+        from graphforge.orchestrator import Orchestrator as OrchClass
     state_file = PROJECT_ROOT / ".agent" / "runs" / run_id / "state.json"
 
     click.echo()

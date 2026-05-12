@@ -11,7 +11,7 @@ import pytest
 import tempfile
 import json
 from pathlib import Path
-from agent_mcp.database_server import DatabaseMCPServer
+from graphforge.database_server import DatabaseMCPServer
 
 
 class TestDDLIndex:

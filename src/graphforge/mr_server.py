@@ -18,11 +18,11 @@ import urllib.request
 import urllib.error
 from abc import ABC, abstractmethod
 
-from agent_mcp.base_mcp import BaseMCPServer
+from graphforge.base_mcp import BaseMCPServer
 
 # 从配置读取默认值
 try:
-    from agent_mcp.config_loader import load_config
+    from graphforge.config_loader import load_config
     _config = load_config()
     _DEFAULT_TARGET_BRANCH = _config.git.target_branch
     _DEFAULT_PROVIDER = getattr(_config.mr, 'provider', 'internal_mcp') if hasattr(_config, 'mr') else 'internal_mcp'

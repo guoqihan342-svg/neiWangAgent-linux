@@ -24,8 +24,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from agent_mcp.config_loader import AppConfig
-from agent_mcp.tracing import get_tracer, Tracer
+from graphforge.config_loader import AppConfig
+from graphforge.tracing import get_tracer, Tracer
 
 logger = logging.getLogger(__name__)
 

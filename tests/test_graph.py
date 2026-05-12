@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_mcp.graph import StateGraph, CompiledGraph, _make_serializable
+from graphforge.graph import StateGraph, CompiledGraph, _make_serializable
 
 
 # =============================================================================

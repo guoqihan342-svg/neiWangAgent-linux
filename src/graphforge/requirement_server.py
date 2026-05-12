@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from agent_mcp.base_mcp import BaseMCPServer
+from graphforge.base_mcp import BaseMCPServer
 
 
 class RequirementMCPServer(BaseMCPServer):

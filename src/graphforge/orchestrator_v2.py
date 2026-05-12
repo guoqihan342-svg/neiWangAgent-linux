@@ -15,7 +15,7 @@ orchestrator_v2.py — Agent 编排器 v0.3.0（图引擎 + 多 Agent）
   PREPARE_COMMIT~CREATE_MR → git_node           → GitAgent
 
 使用方式：
-  from agent_mcp.orchestrator_v2 import AgentOrchestrator
+  from graphforge.orchestrator_v2 import AgentOrchestrator
   orch = AgentOrchestrator(config)
   orch.run("修复登录页面样式错乱")
 """
@@ -28,14 +28,14 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agent_mcp.config_loader import AppConfig
-from agent_mcp.llm_client import LLMClient
-from agent_mcp.tracing import get_tracer, Tracer
-from agent_mcp.graph import StateGraph
-from agent_mcp.agents import AgentPipeline
-from agent_mcp.git_server import GitMCPServer
-from agent_mcp.mr_server import MRMCPServer
-from agent_mcp.knowledge_server import KnowledgeMCPServer
+from graphforge.config_loader import AppConfig
+from graphforge.llm_client import LLMClient
+from graphforge.tracing import get_tracer, Tracer
+from graphforge.graph import StateGraph
+from graphforge.agents import AgentPipeline
+from graphforge.git_server import GitMCPServer
+from graphforge.mr_server import MRMCPServer
+from graphforge.knowledge_server import KnowledgeMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +419,7 @@ class AgentOrchestrator:
         report_lines.append(f"- 分支: {self.run_state.branch_name or '(dry-run)'}")
         report_lines.append(f"- MR: {self.run_state.mr_url or '(dry-run)'}")
 
-        report_path = Path(f".agent/runs/{self.run_state.run_id}/report.md")
+        report_path = Path(f".graphforge/runs/{self.run_state.run_id}/report.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text("\n".join(report_lines))
         logger.info(f"报告已保存: {report_path}")
@@ -447,7 +447,7 @@ class AgentOrchestrator:
         # 驱动状态图
         result = self._graph.invoke(
             initial_state,
-            checkpoint_dir=Path(f".agent/runs/{run_id}/checkpoints"),
+            checkpoint_dir=Path(f".graphforge/runs/{run_id}/checkpoints"),
         )
 
         # 保存 RunState
@@ -457,7 +457,7 @@ class AgentOrchestrator:
 
     def resume(self, run_id: str) -> dict:
         """从断点恢复运行。"""
-        state_path = Path(f".agent/runs/{run_id}/state.json")
+        state_path = Path(f".graphforge/runs/{run_id}/state.json")
         if not state_path.exists():
             raise FileNotFoundError(f"状态不存在: {state_path}")
 
@@ -493,7 +493,7 @@ class AgentOrchestrator:
 
         result = self._graph.resume(
             restore_state,
-            checkpoint_dir=Path(f".agent/runs/{run_id}/checkpoints"),
+            checkpoint_dir=Path(f".graphforge/runs/{run_id}/checkpoints"),
         )
 
         self._save_run_state()
@@ -520,7 +520,7 @@ class AgentOrchestrator:
         """持久化 RunState。"""
         if self.run_state is None:
             return
-        state_path = Path(f".agent/runs/{self.run_state.run_id}/state.json")
+        state_path = Path(f".graphforge/runs/{self.run_state.run_id}/state.json")
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(
             json.dumps(self.run_state.to_dict(), ensure_ascii=False, indent=2)

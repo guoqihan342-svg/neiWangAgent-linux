@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_mcp.knowledge_server import KnowledgeMCPServer
+from graphforge.knowledge_server import KnowledgeMCPServer
 
 
 @pytest.fixture

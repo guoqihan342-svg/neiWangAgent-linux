@@ -9,7 +9,7 @@ test_knowledge_server.py — Knowledge Server 测试
 import pytest
 import tempfile
 from pathlib import Path
-from agent_mcp.knowledge_server import KnowledgeMCPServer, LANGUAGE_EXTENSIONS
+from graphforge.knowledge_server import KnowledgeMCPServer, LANGUAGE_EXTENSIONS
 
 
 class TestLanguageExtensions:
@@ -64,7 +64,7 @@ class TestIndexAndSearch:
     def test_search_before_index(self):
         # ★ 确保没有残留 knowledge 索引影响
         import shutil
-        kb_dir = Path(".agent/knowledge")
+        kb_dir = Path(".graphforge/knowledge")
         if kb_dir.exists():
             shutil.rmtree(kb_dir)
         result = self.ks._search("test")

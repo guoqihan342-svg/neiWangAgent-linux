@@ -29,8 +29,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent_mcp.tracing import get_tracer, Tracer  # ★ 日志追踪
-from agent_mcp.base_mcp import BaseMCPServer  # ★ 继承基类
+from graphforge.tracing import get_tracer, Tracer  # ★ 日志追踪
+from graphforge.base_mcp import BaseMCPServer  # ★ 继承基类
 
 import logging
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ class KnowledgeMCPServer(BaseMCPServer):
         result["language_distribution"] = lang_dist
         result["layer"] = layer
 
-        # ★ P1-8: 持久化知识库到 .agent/knowledge/
+        # ★ P1-8: 持久化知识库到 .graphforge/knowledge/
         self._persist_knowledge(result, files, rp, layer)
 
         return result
@@ -296,7 +296,7 @@ class KnowledgeMCPServer(BaseMCPServer):
     @staticmethod
     def _kb_dir() -> Path:
         """获取知识库持久化目录。"""
-        kb = Path(".agent/knowledge")
+        kb = Path(".graphforge/knowledge")
         kb.mkdir(parents=True, exist_ok=True)
         return kb
 
@@ -306,10 +306,10 @@ class KnowledgeMCPServer(BaseMCPServer):
         ★ P1-8: 将索引结果持久化到磁盘。
 
         持久化结构：
-          .agent/knowledge/summary.json    — Summary 层结果
-          .agent/knowledge/hotspot.json    — Hotspot 层结果
-          .agent/knowledge/deep_index.jsonl — Deep 层索引（每行一个文件）
-          .agent/knowledge/files_index.jsonl — 所有文件元数据索引
+          .graphforge/knowledge/summary.json    — Summary 层结果
+          .graphforge/knowledge/hotspot.json    — Hotspot 层结果
+          .graphforge/knowledge/deep_index.jsonl — Deep 层索引（每行一个文件）
+          .graphforge/knowledge/files_index.jsonl — 所有文件元数据索引
         """
         kb = self._kb_dir()
 

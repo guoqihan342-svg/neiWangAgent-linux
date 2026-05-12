@@ -12,7 +12,7 @@ fully typed access to every configuration section.
   - 通用 (Generic)
 
 Usage:
-    from agent_mcp.config_loader import load_config, ConfigLoader
+    from graphforge.config_loader import load_config, ConfigLoader
 
     # One-shot load
     config = load_config()
@@ -296,7 +296,7 @@ class _DBMigration(BaseModel):
 
     allow_generate_draft: bool = True
     allow_execute: bool = False
-    draft_output_dir: str = ".agent/runs/{run_id}/database/migration-drafts"
+    draft_output_dir: str = ".graphforge/runs/{run_id}/database/migration-drafts"
     require_dba_review: bool = True
 class DatabaseConfig(BaseModel):
     """``database:`` section — 完整数据库策略。"""
@@ -396,7 +396,7 @@ class MRConfig(BaseModel):
     provider: str = "internal_mcp"  # ★ P2-11: 默认企业内网 | github | mock
     target_branch: str = "main"
     title_template: str = "[Agent] {task_title}"
-    description_template: str = ".agent/templates/mr_description.md"
+    description_template: str = ".graphforge/templates/mr_description.md"
     # MR 描述中强制标记"未测试"
     require_untested_marker: bool = True
 # ============================================================================
@@ -667,7 +667,7 @@ class ConfigLoader:
         # Reload (e.g. after config was edited at runtime)
         loader.reload()
 
-    If ``config_path`` is omitted the loader walks up from ``src/agent_mcp/``
+    If ``config_path`` is omitted the loader walks up from ``src/graphforge/``
     to the project root (the directory that contains ``config.yaml``).
 
     ★ 每个实例独立缓存，避免不同项目配置文件互相污染。

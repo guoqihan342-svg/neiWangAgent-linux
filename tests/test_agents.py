@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_mcp.agents import (
+from graphforge.agents import (
     Tool, CodeAgentTool, create_tool,
     BaseAgent, ResearchAgent, PlanAgent, CodeAgent, ReviewAgent, GitAgent,
     AgentPipeline,

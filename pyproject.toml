@@ -1,7 +1,7 @@
 [project]
-name = "neiWangAgent-linux"
-version = "0.1.6"
-description = "本地无服务器 MCP Agent — Linux版：自动改代码 → commit → push → 创建 MR"
+name = "GraphForge"
+version = "0.3.0"
+description = "GraphForge — 图引擎驱动的多Agent代码自动化工具"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1",
@@ -14,11 +14,8 @@ dependencies = [
 db = ["psycopg2-binary>=2.9"]
 
 [project.scripts]
-neiWangAgent = "agent_mcp.cli:main"
+graphforge = "graphforge.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]

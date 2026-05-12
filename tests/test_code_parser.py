@@ -9,7 +9,7 @@ test_code_parser.py — 测试 LLM 代码解析器各格式
   - 路径安全校验
 """
 import pytest
-from agent_mcp.code_parser import (
+from graphforge.code_parser import (
     parse_code_changes,
     _is_valid_path,
     _guess_language,

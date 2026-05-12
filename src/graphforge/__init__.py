@@ -37,16 +37,16 @@ neiWangAgent — 本地无服务器 MCP Agent v0.1.8
     agent resume <run_id>      # 恢复执行
 """
 
-from agent_mcp._version import __version__  # ★ P0-3: 版本号单一来源
+from graphforge._version import __version__  # ★ P0-3: 版本号单一来源
 
 __author__ = "neiWangAgent Team"
 
 # 公开 API
-from agent_mcp.config_loader import (
+from graphforge.config_loader import (
     load_config, ConfigLoader, AppConfig, ProjectType, LANGUAGE_DEFAULTS,
 )
-from agent_mcp.tracing import get_tracer, Tracer, trace_step
-from agent_mcp.orchestrator import (
+from graphforge.tracing import get_tracer, Tracer, trace_step
+from graphforge.orchestrator import (
     Orchestrator, State, STATE_NAMES, RunState,
     CRITICAL_STATES, OPTIONAL_STATES, HUMAN_STATES,
 )

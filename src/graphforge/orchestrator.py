@@ -30,15 +30,15 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Callable
 
-from agent_mcp.config_loader import AppConfig
-from agent_mcp.llm_client import LLMClient
-from agent_mcp.tracing import get_tracer, Tracer
-from agent_mcp.code_parser import parse_code_changes
+from graphforge.config_loader import AppConfig
+from graphforge.llm_client import LLMClient
+from graphforge.tracing import get_tracer, Tracer
+from graphforge.code_parser import parse_code_changes
 from fnmatch import fnmatch
 # ★ P1-6: MCP Server 集成 — Orchestrator 通过 MCP 接口操作 Git/MR/Knowledge
-from agent_mcp.git_server import GitMCPServer
-from agent_mcp.mr_server import MRMCPServer, get_mr_provider
-from agent_mcp.knowledge_server import KnowledgeMCPServer
+from graphforge.git_server import GitMCPServer
+from graphforge.mr_server import MRMCPServer, get_mr_provider
+from graphforge.knowledge_server import KnowledgeMCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ class Orchestrator:
 
         ★ P6-31: 如果恢复状态是 WAITING_CLARIFICATION，自动加载答案。
         """
-        state_path = Path(f".agent/runs/{run_id}/state.json")
+        state_path = Path(f".graphforge/runs/{run_id}/state.json")
         if not state_path.exists():
             raise FileNotFoundError(f"状态不存在: {state_path}")
 
@@ -326,7 +326,7 @@ class Orchestrator:
 
         优先级：answers.json > clarification.json > answers.md
         """
-        cdir = Path(f".agent/runs/{run_id}/clarification")
+        cdir = Path(f".graphforge/runs/{run_id}/clarification")
 
         # 优先读 answers.json
         json_path = cdir / "answers.json"
@@ -340,7 +340,7 @@ class Orchestrator:
                 pass
 
         # Fallback 到旧格式
-        old_path = Path(f".agent/runs/{run_id}/clarification.json")
+        old_path = Path(f".graphforge/runs/{run_id}/clarification.json")
         if old_path.exists():
             try:
                 data = json.loads(old_path.read_text(encoding="utf-8"))
@@ -474,12 +474,12 @@ class Orchestrator:
         """
         [010] 检查知识库是否存在。
 
-        v0.1 简化实现：仅检查 .agent/knowledge/ 目录是否存在。
+        v0.1 简化实现：仅检查 .graphforge/knowledge/ 目录是否存在。
         v0.2 计划：验证知识库新鲜度，过期则提示重建。
 
         日志：记录知识库路径和存在状态
         """
-        kb_path = Path(".agent/knowledge")
+        kb_path = Path(".graphforge/knowledge")
         exists = kb_path.exists()
         self.tracer.debug("state.warmup_check", step="010",
                           detail={"path": str(kb_path), "exists": exists})
@@ -1036,7 +1036,7 @@ class Orchestrator:
         self.run_state.mr_url = mr_url
 
         # ── 写入 MR 描述文件 ──
-        dp = Path(f".agent/runs/{self.run_state.run_id}/mr_description.md")
+        dp = Path(f".graphforge/runs/{self.run_state.run_id}/mr_description.md")
         dp.write_text(mr_desc, encoding="utf-8")
 
         self.tracer.info("state.create_mr", step="180",
@@ -1091,7 +1091,7 @@ class Orchestrator:
           - MR 链接
           - 错误/警告
         """
-        report_path = Path(f".agent/runs/{self.run_state.run_id}/report.md")
+        report_path = Path(f".graphforge/runs/{self.run_state.run_id}/report.md")
         lines = [
             f"# neiWangAgent Run Report",
             f"",
@@ -1237,19 +1237,19 @@ class Orchestrator:
         """
         确保运行目录存在。
 
-        创建路径：.agent/runs/{run_id}/
+        创建路径：.graphforge/runs/{run_id}/
         """
-        Path(f".agent/runs/{self.run_state.run_id}").mkdir(parents=True, exist_ok=True)
+        Path(f".graphforge/runs/{self.run_state.run_id}").mkdir(parents=True, exist_ok=True)
 
     def _save_state(self):
         """
-        持久化当前运行状态到 .agent/runs/{run_id}/state.json。
+        持久化当前运行状态到 .graphforge/runs/{run_id}/state.json。
 
         每次状态转换后自动调用，确保即使崩溃也能恢复。
         """
         if self.run_state:
             self._ensure_run_dir()
-            p = Path(f".agent/runs/{self.run_state.run_id}/state.json")
+            p = Path(f".graphforge/runs/{self.run_state.run_id}/state.json")
             p.write_text(
                 json.dumps(self.run_state.to_dict(), indent=2, ensure_ascii=False),
                 encoding="utf-8"
@@ -1273,9 +1273,9 @@ class Orchestrator:
           2. Hotspot 层 — 核心模块分析
           3. Deep 层    — 深度代码索引（含 MyBatis/Vue）
 
-        预热结果持久化到 .agent/knowledge/state.json
+        预热结果持久化到 .graphforge/knowledge/state.json
         """
-        from agent_mcp.knowledge_server import KnowledgeMCPServer
+        from graphforge.knowledge_server import KnowledgeMCPServer
 
         self.tracer.info("agent.warmup.start")
         ks = KnowledgeMCPServer()
@@ -1310,8 +1310,8 @@ class Orchestrator:
             print(f"  [deep] {r.get('message', '完成')}")
 
         # ── 保存知识库状态 ──
-        Path(".agent/knowledge").mkdir(parents=True, exist_ok=True)
-        kb_path = Path(".agent/knowledge/state.json")
+        Path(".graphforge/knowledge").mkdir(parents=True, exist_ok=True)
+        kb_path = Path(".graphforge/knowledge/state.json")
         result["updated_at"] = datetime.now().isoformat()
         kb_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -1329,7 +1329,7 @@ class Orchestrator:
           - 核心模块文件是否变更（mapper xml, ddl, pom.xml, package.json）
           - 超过 24 小时的 hotspot 索引
         """
-        kb_state = Path(".agent/knowledge/state.json")
+        kb_state = Path(".graphforge/knowledge/state.json")
         if not kb_state.exists():
             return "知识库未构建，将首次构建"
 
@@ -1371,7 +1371,7 @@ class Orchestrator:
 
         核心文件：mapper XML, DDL SQL, pom.xml, package.json, go.mod, pyproject.toml
         """
-        kb_state = Path(".agent/knowledge/state.json")
+        kb_state = Path(".graphforge/knowledge/state.json")
         try:
             prev = json.loads(kb_state.read_text(encoding="utf-8"))
             prev_at = prev.get("updated_at", "1970-01-01")[:19]
