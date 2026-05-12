@@ -421,14 +421,14 @@ def cmd_init(profile: str) -> None:
 
 @main.command("warmup")
 @click.option(
-    "--v2",
-    "use_v2",
+    "--v1",
+    "use_v1",
     is_flag=True,
     default=False,
-    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+    help="使用旧版 v0.2.x 硬编码状态机引擎。",
 )
-def cmd_warmup(use_v2: bool = False) -> None:
-    """构建知识库（Knowledge MCP 三层预热）。
+def cmd_warmup(use_v1: bool = False) -> None:
+    """构建知识库（默认使用 v0.3.0 知识引擎: PageRank + Tree-sitter）。
 
     依次执行：
         1. Summary 层 — 项目结构概览
@@ -439,10 +439,10 @@ def cmd_warmup(use_v2: bool = False) -> None:
     """
     tracer.info("cli.warmup.start")  # ★ 日志
     from graphforge.config_loader import load_config  # ★ 延迟 import
-    if use_v2:
-        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
-    else:
+    if use_v1:
         from graphforge.orchestrator import Orchestrator as OrchClass
+    else:
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     click.echo()
     click.secho("🔥 开始知识库预热...", fg="cyan", bold=True)
 
@@ -480,26 +480,34 @@ def cmd_warmup(use_v2: bool = False) -> None:
     help="需求描述文件路径（.md / .txt / .yaml）。",
 )
 @click.option(
-    "--v2",
-    "use_v2",
+    "--v1",
+    "use_v1",
     is_flag=True,
     default=False,
-    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+    help="使用旧版 v0.2.x 硬编码状态机引擎。",
 )
-def cmd_run(task_file: str, use_v2: bool = False) -> None:
-    """执行完整的 agent 流程。
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="预览模式：不执行实际的 Git 操作。",
+)
+def cmd_run(task_file: str, use_v1: bool = False, dry_run: bool = False) -> None:
+    """执行完整的 agent 流程（默认使用 v0.3.0 图引擎 + 多 Agent）。
 
-    读取需求文件 → 状态机驱动执行 → commit → push → 创建 MR。
+    读取需求文件 → Agent流水线(研究→规划→编码→审查→Git) → 提交推送。
 
     流程阶段：
-        需求理解 → 澄清问答 → 方案规划 → 代码实现 → 变更检查 → 提交推送 → 创建 MR
-    """
+        研究Agent(代码库调研) → 规划Agent(任务拆解) → 编码Agent+审查Agent(循环修正) → GitAgent(提交推送)
+
+    使用 --v1 可回退到旧版硬编码状态机。
+    """ 
     tracer.info("cli.run.start", detail={"task_file": task_file})  # ★ 日志
     from graphforge.config_loader import load_config  # ★ 延迟 import
-    if use_v2:
-        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
-    else:
+    if use_v1:
         from graphforge.orchestrator import Orchestrator as OrchClass
+    else:
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     task_path = Path(task_file).resolve()
     click.echo()
     click.secho(f"📄 读取需求文件：{task_path}", fg="cyan")
@@ -525,7 +533,7 @@ def cmd_run(task_file: str, use_v2: bool = False) -> None:
 
     click.secho("🚀 启动 agent 执行引擎...", fg="cyan", bold=True)
 
-    orch = OrchClass(config)
+    orch = OrchClass(config, dry_run=dry_run)
 
     try:
         orch.run(requirement_text)
@@ -544,13 +552,13 @@ def cmd_run(task_file: str, use_v2: bool = False) -> None:
 @main.command("resume")
 @click.argument("run_id", required=True)
 @click.option(
-    "--v2",
-    "use_v2",
+    "--v1",
+    "use_v1",
     is_flag=True,
     default=False,
-    help="使用 v0.3.0 新引擎（图引擎 + 多 Agent）。",
+    help="使用旧版 v0.2.x 硬编码状态机引擎。",
 )
-def cmd_resume(run_id: str, use_v2: bool = False) -> None:
+def cmd_resume(run_id: str, use_v1: bool = False) -> None:
     """从之前的运行状态恢复执行。
 
     RUN_ID 为 .graphforge/runs/ 下的运行目录名。
@@ -560,10 +568,10 @@ def cmd_resume(run_id: str, use_v2: bool = False) -> None:
     """
     tracer.info("cli.resume.start", detail={"run_id": run_id})  # ★ 日志
     from graphforge.config_loader import load_config  # ★ 延迟 import
-    if use_v2:
-        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
-    else:
+    if use_v1:
         from graphforge.orchestrator import Orchestrator as OrchClass
+    else:
+        from graphforge.orchestrator_v2 import AgentOrchestrator as OrchClass
     state_file = PROJECT_ROOT / ".agent" / "runs" / run_id / "state.json"
 
     click.echo()
