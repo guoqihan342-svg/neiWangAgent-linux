@@ -438,9 +438,6 @@ def apply_unified_diff(patch_text: str, file_path: str, dry_run: bool = False) -
         3. 逐 hunk 应用到原文件
         4. 写回文件（非 dry_run）
     """
-    import difflib
-    import tempfile
-
     pf = Path(file_path)
     if not pf.exists():
         return {"applied": False, "error": f"文件不存在: {file_path}"}

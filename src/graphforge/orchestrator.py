@@ -28,7 +28,7 @@ import subprocess
 import time
 from datetime import datetime, date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from graphforge.config_loader import AppConfig
 from graphforge.llm_client import LLMClient
@@ -37,7 +37,7 @@ from graphforge.code_parser import parse_code_changes
 from fnmatch import fnmatch
 # ★ P1-6: MCP Server 集成 — Orchestrator 通过 MCP 接口操作 Git/MR/Knowledge
 from graphforge.git_server import GitMCPServer
-from graphforge.mr_server import MRMCPServer, get_mr_provider
+from graphforge.mr_server import MRMCPServer
 from graphforge.knowledge_server import KnowledgeMCPServer
 from graphforge._version import __version__
 
@@ -353,6 +353,13 @@ class Orchestrator:
 
         return []
 
+    def _find_transcript_entry(self, state: str, require_key: str | None = None) -> dict | None:
+        """Return the latest transcript entry for a state, optionally requiring a key."""
+        for entry in reversed(self.run_state.transcript):
+            if entry.get("state") == state and (require_key is None or entry.get(require_key)):
+                return entry
+        return None
+
     def _drive_state_machine(self) -> dict:
         """
         ★ P0-4: 核心状态机驱动逻辑（run 和 resume 共用）。
@@ -374,7 +381,7 @@ class Orchestrator:
                 handler = self._handlers.get(state)
                 if handler:
                     success, last_error = self._execute_with_retry(
-                        handler, state, name, max_retries, no_retry_states, _time
+                        handler, state, name, max_retries, no_retry_states
                     )
 
                     if not success and last_error:
@@ -433,7 +440,7 @@ class Orchestrator:
         print(f"\n✅ 完成 [{self.run_state.run_id}]")
         return self.run_state.to_dict()
 
-    def _execute_with_retry(self, handler, state, name, max_retries, no_retry_states, _time) -> tuple[bool, any]:
+    def _execute_with_retry(self, handler, state, name, max_retries, no_retry_states) -> tuple[bool, any]:
         """执行单个状态处理器，带重试。返回 (success, last_error)。"""
         retries = 0 if state in no_retry_states else max_retries
         for attempt in range(retries + 1):
@@ -590,11 +597,8 @@ class Orchestrator:
         输出存入 transcript 供后续状态使用。
         """
         # 获取上一步的上下文
-        context_text = ""
-        for entry in reversed(self.run_state.transcript):
-            if entry.get("state") == "RETRIEVE_CONTEXT":
-                context_text = entry.get("context", "")
-                break
+        context_entry = self._find_transcript_entry("RETRIEVE_CONTEXT", "context")
+        context_text = context_entry.get("context", "") if context_entry else ""
 
         if not context_text:
             self.tracer.debug("state.understand_requirement", step="040",
@@ -1037,7 +1041,7 @@ class Orchestrator:
         self.run_state.mr_url = mr_url
 
         # ── 写入 MR 描述文件 ──
-        dp = Path(f".graphforge/runs/{self.run_state.run_id}/mr_description.md")
+        dp = self._run_file("mr_description.md")
         dp.write_text(mr_desc, encoding="utf-8")
 
         self.tracer.info("state.create_mr", step="180",
@@ -1092,7 +1096,7 @@ class Orchestrator:
           - MR 链接
           - 错误/警告
         """
-        report_path = Path(f".graphforge/runs/{self.run_state.run_id}/report.md")
+        report_path = self._run_file("report.md")
         lines = [
             f"# GraphForge Run Report",
             f"",
@@ -1115,17 +1119,15 @@ class Orchestrator:
         lines.append("")
 
         # ── 自审结果 ──
-        self_review = "无"
-        for entry in self.run_state.transcript:
-            if entry.get("state") == "SELF_REVIEW":
-                self_review = entry.get("result", "?")
-                lines.append("## 自审结果")
-                lines.append(f"**{self_review}**")
-                lines.append("")
-                lines.append("```")
-                lines.append(entry.get("review", "")[:500])
-                lines.append("```")
-                break
+        self_review_entry = self._find_transcript_entry("SELF_REVIEW")
+        if self_review_entry:
+            self_review = self_review_entry.get("result", "?")
+            lines.append("## 自审结果")
+            lines.append(f"**{self_review}**")
+            lines.append("")
+            lines.append("```")
+            lines.append(self_review_entry.get("review", "")[:500])
+            lines.append("```")
 
         # ── 状态流程 ──
         lines.append("## 执行流程")
@@ -1144,13 +1146,12 @@ class Orchestrator:
                 lines.append(f"- {e}")
 
         # ── 数据库影响 ──
-        for entry in self.run_state.transcript:
-            if entry.get("state") == "DATABASE_IMPACT_DETECT" and entry.get("affected_tables"):
-                lines.append("")
-                lines.append("## 数据库影响")
-                for t in entry.get("affected_tables", []):
-                    lines.append(f"- 表 `{t}`")
-                break
+        db_entry = self._find_transcript_entry("DATABASE_IMPACT_DETECT", "affected_tables")
+        if db_entry:
+            lines.append("")
+            lines.append("## 数据库影响")
+            for t in db_entry.get("affected_tables", []):
+                lines.append(f"- 表 `{t}`")
 
         lines.append("")
         lines.append("---")
@@ -1180,27 +1181,25 @@ class Orchestrator:
 
         # ── 自审结果 ──
         self_review_section = ""
-        for entry in self.run_state.transcript:
-            if entry.get("state") == "SELF_REVIEW":
-                result = entry.get("result", "?")
-                review = entry.get("review", "")
-                self_review_section = f"""
+        self_review_entry = self._find_transcript_entry("SELF_REVIEW")
+        if self_review_entry:
+            result = self_review_entry.get("result", "?")
+            review = self_review_entry.get("review", "")
+            self_review_section = f"""
 ### 自审结果: {result}
 {review[:300]}
 """
-                break
 
         # ── 数据库影响 ──
         db_section = ""
-        for entry in self.run_state.transcript:
-            if entry.get("state") == "DATABASE_IMPACT_DETECT" and entry.get("affected_tables"):
-                tables = entry.get("affected_tables", [])
-                db_section = f"""
+        db_entry = self._find_transcript_entry("DATABASE_IMPACT_DETECT", "affected_tables")
+        if db_entry:
+            tables = db_entry.get("affected_tables", [])
+            db_section = f"""
 ### 数据库影响
 | 表名 |
 |------|
 """ + "\n".join(f"| `{t}` |" for t in sorted(tables)) + "\n"
-                break
 
         # ── 错误记录 ──
         errors_section = ""
@@ -1240,7 +1239,13 @@ class Orchestrator:
 
         创建路径：.graphforge/runs/{run_id}/
         """
-        Path(f".graphforge/runs/{self.run_state.run_id}").mkdir(parents=True, exist_ok=True)
+        self._run_dir().mkdir(parents=True, exist_ok=True)
+
+    def _run_dir(self) -> Path:
+        return Path(".graphforge/runs") / self.run_state.run_id
+
+    def _run_file(self, filename: str) -> Path:
+        return self._run_dir() / filename
 
     def _save_state(self):
         """
@@ -1250,7 +1255,7 @@ class Orchestrator:
         """
         if self.run_state:
             self._ensure_run_dir()
-            p = Path(f".graphforge/runs/{self.run_state.run_id}/state.json")
+            p = self._run_file("state.json")
             p.write_text(
                 json.dumps(self.run_state.to_dict(), indent=2, ensure_ascii=False),
                 encoding="utf-8"

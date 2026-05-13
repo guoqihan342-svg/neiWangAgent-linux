@@ -16,6 +16,7 @@ v0.2: 只读连接验证
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -133,7 +134,6 @@ class DatabaseMCPServer(BaseMCPServer):
             }
 
         try:
-            import importlib
             psycopg2_spec = importlib.util.find_spec("psycopg2")
             if psycopg2_spec is None:
                 return {"verified": False, "error": "psycopg2 未安装（pip install psycopg2-binary）"}
@@ -582,7 +582,6 @@ class DatabaseMCPServer(BaseMCPServer):
         name = pf.stem.lower()
 
         # ── Java Entity 命名规则：UserEntity → user / User → user ──
-        import re
         # 去掉 Entity/Model/PO 后缀
         clean = re.sub(r"(entity|model|po|vo|dto)$", "", name, flags=re.IGNORECASE)
         # 驼峰转下划线

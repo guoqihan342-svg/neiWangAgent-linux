@@ -44,15 +44,26 @@ import logging
 import re
 import subprocess
 import sys
-import tempfile
-import textwrap
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_json_response(raw_response: str, fallback_key: str, **fallback_extra) -> Dict[str, Any]:
+    """Parse a direct or fenced JSON response with a structured fallback."""
+    json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
+    try:
+        if json_match:
+            return json.loads(json_match.group(1))
+        return json.loads(raw_response)
+    except json.JSONDecodeError:
+        fallback = {fallback_key: raw_response}
+        fallback.update(fallback_extra)
+        return fallback
 
 
 # =============================================================================
@@ -562,15 +573,7 @@ class ResearchAgent(BaseAgent):
 ```"""
 
     def _parse_output(self, raw_response: str) -> Dict[str, Any]:
-        # 提取 JSON
-        json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(1))
-        # 尝试直接解析
-        try:
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"raw_analysis": raw_response}
+        return _parse_json_response(raw_response, "raw_analysis")
 
 
 # =============================================================================
@@ -630,13 +633,7 @@ class PlanAgent(BaseAgent):
 ```"""
 
     def _parse_output(self, raw_response: str) -> Dict[str, Any]:
-        json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(1))
-        try:
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"raw_plan": raw_response}
+        return _parse_json_response(raw_response, "raw_plan")
 
 
 # =============================================================================
@@ -729,13 +726,7 @@ class CodeAgent(BaseAgent):
 ```"""
 
     def _parse_output(self, raw_response: str) -> Dict[str, Any]:
-        json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(1))
-        try:
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"raw_changes": raw_response}
+        return _parse_json_response(raw_response, "raw_changes")
 
 
 # =============================================================================
@@ -799,14 +790,7 @@ class ReviewAgent(BaseAgent):
 ```"""
 
     def _parse_output(self, raw_response: str) -> Dict[str, Any]:
-        json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(1))
-            return result
-        try:
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"raw_review": raw_response, "passed": False}
+        return _parse_json_response(raw_response, "raw_review", passed=False)
 
 
 # =============================================================================
@@ -859,13 +843,7 @@ class GitAgent(BaseAgent):
 ```"""
 
     def _parse_output(self, raw_response: str) -> Dict[str, Any]:
-        json_match = re.search(r'```json\s*(.*?)```', raw_response, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group(1))
-        try:
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            return {"raw_git_info": raw_response}
+        return _parse_json_response(raw_response, "raw_git_info")
 
 
 # =============================================================================

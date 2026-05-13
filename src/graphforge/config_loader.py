@@ -25,12 +25,14 @@ Usage:
 
 from __future__ import annotations
 
-import json
+import copy
 import os
 import re
+import sys
 from enum import Enum
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, ClassVar, Optional
+from typing import Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -568,7 +570,6 @@ class AppConfig(BaseModel):
 
     def is_path_denied(self, path: str) -> bool:
         """检查路径是否在禁止列表中（简单 glob 匹配）。"""
-        from fnmatch import fnmatch
         for pattern in self.get_deny_paths_flat():
             if fnmatch(path, pattern) or fnmatch(Path(path).name, pattern):
                 return True
@@ -643,7 +644,6 @@ def apply_profile(base_config: dict, profile_name: str) -> dict:
     返回：
         dict: 合并后的配置
     """
-    import copy
     profile = PROFILES.get(profile_name)
     if not profile:
         raise ValueError(f"未知 profile: {profile_name}，可选: {list(PROFILES.keys())}")
@@ -703,7 +703,6 @@ class ConfigLoader:
     @staticmethod
     def _resolve_env_in_config(data: dict) -> dict:
         """递归解析配置中的所有 ${VAR} 引用。"""
-        import copy
         resolved = copy.deepcopy(data)
         for key, value in resolved.items():
             if isinstance(value, str):
@@ -745,9 +744,6 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
 # ============================================================================
 
 if __name__ == "__main__":
-    import json
-    import sys
-
     try:
         cfg = load_config()
     except Exception as exc:
