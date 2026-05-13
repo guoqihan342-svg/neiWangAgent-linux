@@ -134,7 +134,7 @@ class ClarificationMCPServer(BaseMCPServer):
             f"",
             f"## 如何回复",
             f"",
-            f"请在下方每个问题后填写答案，然后运行 `neiWangAgent resume {rid}` 继续。",
+            f"请在下方每个问题后填写答案，然后运行 `graphforge resume {rid}` 继续。",
             f"",
         ])
         for i in range(len(questions)):
@@ -157,7 +157,7 @@ class ClarificationMCPServer(BaseMCPServer):
             copy_lines.append(f"{i}. {q}")
             copy_lines.append(f"   答：")
             copy_lines.append("")
-        copy_lines.append(f"回复后运行：`neiWangAgent resume {rid}`")
+        copy_lines.append(f"回复后运行：`graphforge resume {rid}`")
         (cdir / "copy_message.md").write_text("\n".join(copy_lines), encoding="utf-8")
 
         return {"questions": questions, "run_id": rid, "status": "waiting", "files_saved": True}

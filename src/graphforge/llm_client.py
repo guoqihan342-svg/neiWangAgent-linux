@@ -1,4 +1,4 @@
-"""OpenAI-compatible LLM client for neiWangAgent.
+"""OpenAI-compatible LLM client for GraphForge.
 
 Uses httpx for HTTP calls. Supports chat completion with tool calling,
 configurable base URL / model via AppConfig, and structured prompting.
@@ -30,7 +30,7 @@ from graphforge.tracing import get_tracer, Tracer
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
-You are neiWangAgent, an autonomous coding agent that follows a strict state-machine flow.
+You are GraphForge, an autonomous coding agent that follows a strict state-machine flow.
 
 States: UNDERSTANDING -> PLANNING -> IMPLEMENTING -> VERIFYING -> COMMITTING -> CREATING_MR
 

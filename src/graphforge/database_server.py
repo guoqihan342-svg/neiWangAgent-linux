@@ -24,6 +24,7 @@ from pathlib import Path
 
 from graphforge.base_mcp import BaseMCPServer
 from graphforge.tracing import get_tracer, Tracer
+from graphforge._version import __version__
 
 
 class DatabaseMCPServer(BaseMCPServer):
@@ -613,7 +614,7 @@ class DatabaseMCPServer(BaseMCPServer):
         ★ P5-29: LLM 驱动的 migration 草稿生成。
 
         基于数据库影响检测结果，生成 SQL migration 草稿。
-        v0.1.8: 返回模板化草稿 + 影响分析上下文。
+        当前版本: 返回模板化草稿 + 影响分析上下文。
         """
         # ── 加载 DDL 索引提供上下文 ──
         ddl_tables = self._load_ddl_tables()
@@ -624,7 +625,7 @@ class DatabaseMCPServer(BaseMCPServer):
 
         draft = (
             f"-- ============================================================\n"
-            f"-- Migration Draft — neiWangAgent v0.1.8\n"
+            f"-- Migration Draft — GraphForge {__version__}\n"
             f"-- Description: {description}\n"
             f"-- Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"-- ⚠️ 此文件由 Agent 生成草稿，请人工审核后执行\n"

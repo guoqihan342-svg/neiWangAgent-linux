@@ -1,5 +1,5 @@
 """
-neiWangAgent CLI — 基于 Click 的命令行入口。
+GraphForge CLI — 基于 Click 的命令行入口。
 
 提供 4 个子命令：
     agent init         创建 .graphforge/ 目录结构、默认 config.yaml、business-docs/README.md
@@ -21,6 +21,7 @@ import click
 # from graphforge.config_loader import load_config
 # from graphforge.orchestrator import Orchestrator
 from graphforge.tracing import get_tracer  # tracing 无外部依赖，安全
+from graphforge._version import __version__
 
 tracer = get_tracer()
 
@@ -44,12 +45,12 @@ PROJECT_ROOT: Path = _find_project_root()
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG_YAML = r"""# =============================================================================
-# neiWangAgent — Configuration (Profile: internal)
+# GraphForge — Configuration (Profile: internal)
 # ★ P3-16: 企业内网默认 — LLM 配置走环境变量
 # =============================================================================
 
 project:
-  name: "neiWangAgent"
+  name: "GraphForge"
   default_branch: "master"
   code_platform: "internal_custom"  # 企业内网
   project_type: "generic"
@@ -165,7 +166,7 @@ security:
 
 # GitHub Demo Profile 配置（自测用 — 全部走环境变量）
 GITHUB_DEMO_CONFIG_YAML = r"""# =============================================================================
-# neiWangAgent — Configuration (Profile: github-demo)
+# GraphForge — Configuration (Profile: github-demo)
 # ★ v0.2.0: 全部走环境变量，无硬编码外网URL
 #
 # 使用前设置环境变量:
@@ -176,7 +177,7 @@ GITHUB_DEMO_CONFIG_YAML = r"""# ================================================
 # =============================================================================
 
 project:
-  name: "neiWangAgent"
+  name: "GraphForge"
   default_branch: "main"
   code_platform: "github"
   project_type: "generic"
@@ -309,9 +310,9 @@ DEFAULT_BUSINESS_README = """# business-docs
 # =============================================================================
 
 @click.group()
-@click.version_option(version="v0.2.0", prog_name="neiWangAgent")  # ★ P0-3: 统一版本号
+@click.version_option(version=__version__, prog_name="GraphForge")  # ★ P0-3: 统一版本号
 def main() -> None:
-    """neiWangAgent — 本地 MCP Agent，自动改代码 → commit → push → 创建 MR。"""
+    """GraphForge — 本地 MCP Agent，自动改代码 → commit → push → 创建 MR。"""
     pass
 
 

@@ -1,5 +1,5 @@
 """
-config_loader.py — Typed configuration loader for neiWangAgent.
+config_loader.py — Typed configuration loader for GraphForge.
 
 Reads config.yaml from the project root and provides Pydantic v2-validated,
 fully typed access to every configuration section.
@@ -147,7 +147,7 @@ PROJECT_ROOT: Path = _find_project_root()
 class ProjectConfig(BaseModel):
     """``project:`` section — 项目基本信息 + 语言类型。"""
 
-    name: str = "neiWangAgent"
+    name: str = "GraphForge"
     default_branch: str = "main"
     code_platform: str = "internal_custom"  # ★ P2-11: 默认企业内网
     # ★ 新增：项目类型（决定源码路径、ORM、deny_paths 等默认值）

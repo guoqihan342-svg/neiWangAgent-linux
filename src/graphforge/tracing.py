@@ -1,5 +1,5 @@
 """
-日志追踪系统 — 为 neiWangAgent 提供结构化日志、步骤追踪和性能分析。
+日志追踪系统 — 为 GraphForge 提供结构化日志、步骤追踪和性能分析。
 
 功能层级：
   1. 结构化日志（JSON Lines 格式，方便 grep / jq 分析）
@@ -146,7 +146,7 @@ class ConsoleFormatter(logging.Formatter):
 # 日志配置函数（创建 logger 实例）
 # =============================================================================
 
-def _build_logger(name: str = "neiWangAgent") -> logging.Logger:
+def _build_logger(name: str = "GraphForge") -> logging.Logger:
     """
     构建并配置一个 logger 实例。
 
@@ -390,7 +390,7 @@ def get_tracer() -> Tracer:
     if _global_tracer is None:
         with _tracer_lock:
             if _global_tracer is None:
-                logger = _build_logger("neiWangAgent")
+                logger = _build_logger("GraphForge")
                 _global_tracer = Tracer(logger)
     return _global_tracer
 

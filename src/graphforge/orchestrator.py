@@ -39,6 +39,7 @@ from fnmatch import fnmatch
 from graphforge.git_server import GitMCPServer
 from graphforge.mr_server import MRMCPServer, get_mr_provider
 from graphforge.knowledge_server import KnowledgeMCPServer
+from graphforge._version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -1093,7 +1094,7 @@ class Orchestrator:
         """
         report_path = Path(f".graphforge/runs/{self.run_state.run_id}/report.md")
         lines = [
-            f"# neiWangAgent Run Report",
+            f"# GraphForge Run Report",
             f"",
             f"| 项目 | 值 |",
             f"|------|-----|",
@@ -1153,7 +1154,7 @@ class Orchestrator:
 
         lines.append("")
         lines.append("---")
-        lines.append(f"> 由 neiWangAgent v0.1.9 自动生成 | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"> 由 GraphForge {__version__} 自动生成 | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
         print(f"    📊 报告: {report_path}")
@@ -1229,7 +1230,7 @@ class Orchestrator:
 2. 请确认边界条件处理
 3. 请评估是否需要补充测试
 
-> ⚠️ 此 MR 由 neiWangAgent 自动生成，请人工 Review 后合并
+> ⚠️ 此 MR 由 GraphForge 自动生成，请人工 Review 后合并
 > ℹ️ 未执行单元测试，请自行验证
 """
 

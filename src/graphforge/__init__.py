@@ -1,5 +1,5 @@
 """
-neiWangAgent — 本地无服务器 MCP Agent v0.1.8
+GraphForge — 本地无服务器 MCP Agent
 
 自动改代码 → commit → push → 创建 MR。
 
@@ -39,7 +39,7 @@ neiWangAgent — 本地无服务器 MCP Agent v0.1.8
 
 from graphforge._version import __version__  # ★ P0-3: 版本号单一来源
 
-__author__ = "neiWangAgent Team"
+__author__ = "GraphForge Team"
 
 # 公开 API
 from graphforge.config_loader import (
